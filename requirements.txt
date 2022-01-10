@@ -1,0 +1,11 @@
+# lightning
+pytorch-lightning
+numpy
+scipy
+scikit-learn
+einops
+matplotlib
+wandb
+omegaconf
+librosa
+halo
