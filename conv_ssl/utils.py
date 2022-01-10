@@ -1,0 +1,233 @@
+from omegaconf import OmegaConf
+from os.path import exists, join, dirname
+import torch
+from torch.nn.utils.rnn import pad_sequence
+import json
+
+
+def get_checkpoint_path(
+    artifact, artifact_dir="./artifacts", project_url="how_so/ULMProjection"
+):
+    checkpoint = join(artifact_dir, artifact, "model.ckpt")
+    if not exists(checkpoint):
+        import wandb
+
+        # URL: always '/'
+        artifact_path = project_url + "/" + artifact
+        with wandb.init() as run:
+            artifact = run.use_artifact(artifact_path, type="model")
+            _ = artifact.download()
+    return checkpoint
+
+
+def load_metadata(path="/how_so/ULMProjection/runs/3qt6whg9"):
+    import wandb
+
+    api = wandb.Api()
+    run = api.run(path)
+    print(run.history())
+    return run
+
+
+def repo_root():
+    """
+    Returns the absolute path to the git repository
+    """
+    # return (
+    #     run(["git", "rev-parse", "--show-toplevel"], capture_output=True)
+    #     .stdout.decode()
+    #     .strip()
+    # )
+    root = dirname(__file__)
+    root = dirname(root)
+    return root
+
+
+def write_json(data, filename):
+    with open(filename, "w", encoding="utf-8") as jsonfile:
+        json.dump(data, jsonfile, ensure_ascii=False)
+
+
+def read_json(path, encoding="utf8"):
+    with open(path, "r", encoding=encoding) as f:
+        data = json.loads(f.read())
+    return data
+
+
+def read_txt(path, encoding="utf-8"):
+    data = []
+    with open(path, "r", encoding=encoding) as f:
+        for line in f.readlines():
+            data.append(line.strip())
+    return data
+
+
+def count_parameters(model, as_string=True, learnable=True):
+    """
+    Count the numper of parameters in a model. If learnable == True only count those that requires gradient else all.
+
+    as_string: Bool, if True provides easily readable string else the value
+    """
+    n = 0
+    for p in model.parameters():
+        if learnable:
+            if p.requires_grad:
+                n += p.nelement()
+        else:
+            n += p.nelement()
+
+    if as_string:
+        m = ""
+        for i, j in enumerate(range(len(str(n)) - 1, -1, -1)):
+            if i > 0 and i % 3 == 0:
+                m += ","
+            m += str(n)[j]
+        m = m[::-1]
+        return m
+    return n
+
+
+def find_island_idx_len(x):
+    """
+    Finds patches of the same value.
+
+    starts_idx, duration, values = find_island_idx_len(x)
+
+    e.g:
+        ends = starts_idx + duration
+
+        s_n = starts_idx[values==n]
+        ends_n = s_n + duration[values==n]  # find all patches with N value
+
+    """
+    assert x.ndim == 1
+    n = len(x)
+    y = x[1:] != x[:-1]  # pairwise unequal (string safe)
+    i = torch.cat(
+        (torch.where(y)[0], torch.tensor(n - 1, device=x.device).unsqueeze(0))
+    ).long()
+    it = torch.cat((torch.tensor(-1, device=x.device).unsqueeze(0), i))
+    dur = it[1:] - it[:-1]
+    idx = torch.cumsum(
+        torch.cat((torch.tensor([0], device=x.device, dtype=torch.long), dur)), dim=0
+    )[
+        :-1
+    ]  # positions
+    return idx, dur, x[i]
+
+
+def unit_condense_repetition(x):
+    """
+    Condense repetitions and get the variable length inputs.
+
+
+    Name: unit_condense_repetition
+    Args:
+        x:              torch.Tensor: (B, N)
+
+    Repetition:
+        condense:       torch.tensor: (B, M)
+        duration:       torch.tensor: (B, M)
+        lenths:         list: (B,)
+    """
+    # find_island_idx
+    if x.ndim == 1:
+        _, duration, condense = find_island_idx_len(x)
+        lengths = len(duration)
+    else:
+        condense, duration, lengths = [], [], []
+        for b in range(x.shape[0]):
+            _, dur, val = find_island_idx_len(x[b])
+            condense.append(val)
+            duration.append(dur)
+            lengths.append(len(val))
+        condense = pad_sequence(condense, batch_first=True)
+        duration = pad_sequence(duration, batch_first=True)
+    return condense, duration, lengths
+
+
+def condense_to_original(condense, duration, lengths):
+    """
+    Condense repetitions and get the variable length inputs.
+
+
+    Name: unit_condense_repetition
+    Args:
+        x:              torch.Tensor: (B, N)
+
+    Repetition:
+        condense:       torch.tensor: (B, M)
+        duration:       torch.tensor: (B, M)
+        lenths:         list: (B,)
+    """
+
+    if condense.ndim > 1:
+        units = []
+        for c, d, l in zip(condense, duration, lengths):
+            units.append(torch.repeat_interleave(c[:l], d[:l]))
+        units = torch.stack(units)
+    else:
+        units = torch.repeat_interleave(condense, duration)
+    return units
+
+
+def load_config(path=None, args=None, format="dict"):
+    conf = OmegaConf.load(path)
+    if args is not None:
+        conf = OmegaConfArgs.update_conf_with_args(conf, args)
+
+    if format == "dict":
+        conf = OmegaConf.to_object(conf)
+    return conf
+
+
+class OmegaConfArgs:
+    """
+    This is annoying... And there is probably a SUPER easy way to do this... But...
+
+    Desiderata:
+        * Define the model completely by an OmegaConf (yaml file)
+            - OmegaConf argument syntax  ( '+segments.c1=10' )
+        * run `sweeps` with WandB
+            - requires "normal" argparse arguments (i.e. '--batch_size' etc)
+
+    This class is a helper to define
+    - argparse from config (yaml)
+    - update config (loaded yaml) with argparse arguments
+
+
+    See ./config/sosi.yaml for reference yaml
+    """
+
+    @staticmethod
+    def add_argparse_args(parser, conf, omit_fields=None):
+        for field, settings in conf.items():
+            if omit_fields is None:
+                for setting, value in settings.items():
+                    name = f"--{field}.{setting}"
+                    parser.add_argument(name, default=None, type=type(value))
+            else:
+                if not any([field == f for f in omit_fields]):
+                    for setting, value in settings.items():
+                        name = f"--{field}.{setting}"
+                        parser.add_argument(name, default=None, type=type(value))
+        return parser
+
+    @staticmethod
+    def update_conf_with_args(conf, args, omit_fields=None):
+        if not isinstance(args, dict):
+            args = vars(args)
+
+        for field, settings in conf.items():
+            if omit_fields is None:
+                for setting in settings:
+                    argname = f"{field}.{setting}"
+                    if argname in args and args[argname] is not None:
+                        conf[field][setting] = args[argname]
+            else:
+                if not any([field == f for f in omit_fields]):
+                    for setting in settings:
+                        argname = f"{field}.{setting}"
+                        if argname in args:
+                            conf[field][setting] = args[argname]
+        return conf

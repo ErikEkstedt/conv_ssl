@@ -1,0 +1,86 @@
+encoder:
+  type: scpc # hubert, wav2vec
+  use: 1  # hubert,wav2vec can be omitted and features extracted in advance
+  dout: 128
+
+quantizer:
+  type: vq # VQ
+  vector_path: null
+  codebook_size: 100
+  codebook_dim: 256
+  use: 1
+
+tier1_seq_model:
+  type: GRU
+  dim: 128
+  num_layers: 1
+  num_heads: 1
+
+tier2_seq_model:
+  use: 1
+  type: GRU
+  dim: 128
+  num_layers: 1
+  num_heads: 1
+
+vad_class_prediction:
+  n_classes: 256
+  dim: 
+
+
+# SCPC features -> this should be composible
+frame_encoder:
+  dim: 256
+  dout: 256
+  conv_causal: true
+  sinc: true
+  activation: LeakyReLU
+  mlp: false
+  dropout: 0.05
+
+segments:
+  c1: 10
+  c2: 1000
+  boundary_threshold: 0.05
+  return_features: [average]
+
+sosi_encoder:
+  use: 1
+  dim: 256
+  dout: 256
+  dropout: 0.1
+  activation: LeakyReLU
+  mlp: false
+  discrete: false
+
+prosody_encoder:
+  use: 0
+  dim: 64
+  dout: 32
+  dropout: 0.1
+  activation: LeakyReLU
+  mlp: false
+  discrete: false
+
+sosi_ar:
+  ar_dim: 128
+  num_layers: 1
+  num_heads: 1
+  ar: GRU
+  sizeSeq: 100
+  abspos: true
+  keep_hidden: false
+
+
+training:
+  learning_rate: 1.4e-4
+  alpha: 0.5
+  clip_duration: 2
+  n_negatives: 20
+  segment_epoch_start: 1
+  frame_sampling: within
+  frame_sampling_ratio: 0.8
+  sosi_sampling: within
+  sosi_sampling_ratio: 0.5
+  temperature: 1.
+  cosine_coef: 1.
