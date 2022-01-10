@@ -8,6 +8,13 @@ from conv_ssl.models.kmean import KMeanEmbedding
 from conv_ssl.utils import load_config, repo_root
 
 DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/encoder.yaml")
+MODEL_HZ = {
+    "hubert_base": 50,
+    "wav2vec2": 50,
+    "wavlm_base": 50,
+    "wavlm_base+": 50,
+    "cpc": 100,
+}
 
 
 class EncoderPretrained(nn.Module):
@@ -72,7 +79,9 @@ class EncoderPretrained(nn.Module):
         if self.conf["encoder"]["type"] in ["hubert_base", "wav2vec2_base"]:
             z = self.encoder.extract_features(waveform)[0][self.encoder_layer]
         elif self.conf["encoder"]["type"] in ["wavlm_base", "wavlm_base+"]:
-            z = self.encoder.extract_features(waveform)[0]
+            z = self.encoder.extract_features(
+                waveform, output_layer=self.encoder_layer
+            )[0]
         else:
             if waveform.ndim == 2:
                 waveform = waveform.unsqueeze(1)
@@ -87,47 +96,3 @@ class EncoderPretrained(nn.Module):
         z = self.encode(waveform)
         q, q_idx = self.quantizer(z)
         return {"q": q, "q_idx": q_idx, "z": z}
-
-
-def test(name):
-    from datasets_turntaking.dm_dialog_audio import quick_load_dm
-    from conv_ssl.utils import count_parameters
-
-    dm = quick_load_dm(batch_size=4, num_workers=0)
-    dm.setup()
-
-    # Try out a dataloder with the awesome iterable dataset
-    dloader = dm.val_dataloader()
-    diter = iter(dloader)
-
-    conf_path = join(repo_root(), "conv_ssl/config")
-    if name == "hubert_base":
-        conf_path = join(conf_path, "encoder.yaml")
-    elif name == "cpc":
-        conf_path = join(conf_path, "encoder_cpc.yaml")
-    elif name == "wav2vec2_base":
-        conf_path = join(conf_path, "encoder_wav2vec2.yaml")
-    else:
-        raise NotImplementedError(f"Name: {name}")
-
-    conf = EncoderPretrained.load_config(conf_path)
-    conf["quantizer"]["vector_path"] = None
-    model = EncoderPretrained(conf)
-    n = count_parameters(model, as_string=True, learnable=False)
-    print(f"{model.name.upper()}: ", n)
-
-    batch = next(diter)
-    print("batch['waveform']: ", tuple(batch["waveform"].shape))
-
-    z = model.encode(batch["waveform"])
-    print("z: ", tuple(z.shape))
-
-
-if __name__ == "__main__":
-    import sys
-
-    name = "hubert_base"
-    if len(sys.argv) > 1:
-        name = sys.argv[1]
-        del sys.argv[1]
-    test(name)

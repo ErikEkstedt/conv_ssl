@@ -1,4 +1,4 @@
-from .encoder import EncoderPretrained
+from .encoder import EncoderPretrained, MODEL_HZ
 from .pretrained_encoders import CHECKPOINTS
 from .autoregressive import AR
 from .projection_model import ProjectionModel

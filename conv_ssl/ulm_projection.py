@@ -4,7 +4,7 @@ from typing import Any, Dict
 import torch
 import pytorch_lightning as pl
 
-from conv_ssl.models import ProjectionModel, EncoderPretrained, CHECKPOINTS
+from conv_ssl.models import ProjectionModel, EncoderPretrained, CHECKPOINTS, MODEL_HZ
 from conv_ssl.vad_pred_animation import VadPredAnimator
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
@@ -12,8 +12,6 @@ DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/ulm.yaml")
 
 # The complete model with an Encoder (could be pretrained) and the ULMProjectionModel
 class ULMProjection(pl.LightningModule):
-    MODEL_HZ = {"hubert_base": 50, "wav2vec2": 50, "cpc": 100}
-
     def __init__(self, conf):
         super().__init__()
         self.conf = conf
@@ -135,7 +133,7 @@ class ULMProjection(pl.LightningModule):
             input_ids = batch["q"]
         else:
             # If dataset have units it has also changed the VAD so only do this here
-            if self.MODEL_HZ[self.encoder.name] == 50:
+            if MODEL_HZ[self.encoder.name] == 50:
                 batch["vad"] = self.encoder.hz_100_to_50(batch["vad"])[:, :-1]
                 batch["vad_label"] = self.encoder.hz_100_to_50(batch["vad_label"])[
                     :, :-1

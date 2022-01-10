@@ -124,28 +124,6 @@ def load_pretrained_encoder(name="hubert_base"):
         raise NotImplementedError(f"{name} not implemented. Try: {NAMES}")
 
 
-def test(name="hubert_base"):
-    from datasets_turntaking.dm_dialog_audio import quick_load_dm
-    from conv_ssl.utils import count_parameters
-
-    dm = quick_load_dm(batch_size=4, num_workers=0)
-    dm.setup()
-
-    # Try out a dataloder with the awesome iterable dataset
-    dloader = dm.val_dataloader()
-    diter = iter(dloader)
-
-    model = load_pretrained_encoder(name)
-    n = count_parameters(model, as_string=True, learnable=False)
-    print(f"{model.name.upper()}: ", n)
-
-    batch = next(diter)
-    print("batch['waveform']: ", tuple(batch["waveform"].shape))
-
-    z = model.encode(batch["waveform"])
-    print("z: ", tuple(z.shape))
-
-
 def test_cpc():
     from conv_ssl.utils import count_parameters
 
@@ -163,19 +141,10 @@ def test_cpc():
 
 def test_wavlm():
 
-    model = load_wavlm("wavlm_base")
+    model = load_wavlm("wavlm_base+")
+
     # extract the representation of last layer
     wav_input_16khz = torch.randn(1, 16000)
-    rep = model.extract_features(wav_input_16khz)[0]
+    rep = model.extract_features(wav_input_16khz, output_layer=6)[0]
 
-
-if __name__ == "__main__":
-
-    from argparse import ArgumentParser
-
-    parser = ArgumentParser()
-    parser.add_argument(
-        "--name", default="hubert_base", help="['hubert_base', 'wav2vec2', 'cpc']"
-    )
-    args = parser.parse_args()
-    test(args.name)
+    print("rep: ", tuple(rep.shape))
