@@ -39,6 +39,20 @@ class EncoderPretrained(nn.Module):
     def name(self):
         return self.conf["encoder"]["type"]
 
+    @staticmethod
+    def default_config_path():
+        return DEFAULT_CONFIG
+
+    @staticmethod
+    def load_config(path=None, args=None, format="dict"):
+        if path is None:
+            path = EncoderPretrained.default_config_path()
+        return load_config(path, args=args, format=format)
+
+    @staticmethod
+    def load_state_dict(path):
+        return torch.load(path)
+
     def freeze(self):
         for p in self.encoder.parameters():
             p.requires_grad_(False)
@@ -57,6 +71,8 @@ class EncoderPretrained(nn.Module):
     def encode(self, waveform):
         if self.conf["encoder"]["type"] in ["hubert_base", "wav2vec2_base"]:
             z = self.encoder.extract_features(waveform)[0][self.encoder_layer]
+        elif self.conf["encoder"]["type"] in ["wavlm_base", "wavlm_base+"]:
+            z = self.encoder.extract_features(waveform)[0]
         else:
             if waveform.ndim == 2:
                 waveform = waveform.unsqueeze(1)
@@ -71,20 +87,6 @@ class EncoderPretrained(nn.Module):
         z = self.encode(waveform)
         q, q_idx = self.quantizer(z)
         return {"q": q, "q_idx": q_idx, "z": z}
-
-    @staticmethod
-    def default_config_path():
-        return DEFAULT_CONFIG
-
-    @staticmethod
-    def load_config(path=None, args=None, format="dict"):
-        if path is None:
-            path = EncoderPretrained.default_config_path()
-        return load_config(path, args=args, format=format)
-
-    @staticmethod
-    def load_state_dict(path):
-        return torch.load(path)
 
 
 def test(name):

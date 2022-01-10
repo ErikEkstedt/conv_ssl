@@ -5,6 +5,7 @@ from torchaudio.pipelines import HUBERT_BASE, WAV2VEC2_BASE
 from torchaudio.models import hubert_base, wav2vec2_base
 
 from conv_ssl.utils import repo_root
+from conv_ssl.models.WavLM import WavLM, WavLMConfig
 
 
 """
@@ -20,6 +21,8 @@ CHECKPOINTS = {
     "wav2vec2_base": join(
         repo_root(), "assets/checkpoints/wav2vec2/wav2vec2_fairseq_base_ls960.pth"
     ),
+    "wavlm_base": join(repo_root(), "assets/checkpoints/wavlm/WavLM-Base.pt"),
+    "wavlm_base+": join(repo_root(), "assets/checkpoints/wavlm/WavLM-Base+.pt"),
     "cpc": join(repo_root(), "assets/checkpoints/cpc/60k_epoch4-d0f474de.pt"),
 }
 
@@ -92,12 +95,29 @@ def load_wav2vec2_base():
     return model
 
 
+def load_wavlm(name="wavlm_base+"):
+    """
+    Original Repo: https://github.com/microsoft/unilm/tree/master/wavlm
+    """
+    # load the pre-trained checkpoints
+    # load the pre-trained checkpoints
+    checkpoint = torch.load(CHECKPOINTS[name])
+    cfg = WavLMConfig(checkpoint["cfg"])
+    model = WavLM(cfg)
+    model.load_state_dict(checkpoint["model"])
+    model.eval()
+    model.name = name
+    return model
+
+
 def load_pretrained_encoder(name="hubert_base"):
-    assert name.lower() in NAMES, f"name {name} not recognized. Coose: {NAMES}"
+    assert name.lower() in CHECKPOINTS.keys()
     if name == "hubert_base":
         return load_hubert_base_custom()
     elif name == "wav2vec2_base":
         return load_wav2vec2_base_custom()
+    elif name.startswith("wavlm"):
+        return load_wavlm(name)
     elif name.lower() == "cpc":
         return load_CPC()
     else:
@@ -139,6 +159,14 @@ def test_cpc():
 
     x = batch["waveform"]
     c, z, l = model(x, None)
+
+
+def test_wavlm():
+
+    model = load_wavlm("wavlm_base")
+    # extract the representation of last layer
+    wav_input_16khz = torch.randn(1, 16000)
+    rep = model.extract_features(wav_input_16khz)[0]
 
 
 if __name__ == "__main__":
