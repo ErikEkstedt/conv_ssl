@@ -7,12 +7,22 @@
 
 ```bash
 ConvSSL
+├── assets
+│   └── checkpoints
+│       ├── cpc
+│       │   └── 60k_epoch4-d0f474de.pt
+│       ├── hubert
+│       │   └── hubert_fairseq_base_ls960.pth
+│       ├── wav2vec2
+│       │   └── wav2vec2_fairseq_base_ls960.pth
+│       └── wavlm
+│           ├── WavLM-Base+.pt
+│           └── WavLM-Base.pt
 ├── config
 │   ├── conv_ssl.yaml
 │   ├── ulm_small.yaml
 │   └── ulm.yaml
-├── interaction
-│   └── window_analysis.py
+├── tests/
 ├── encoder.py
 ├── projection_model.py
 ├── ulm_projection.py
@@ -36,6 +46,28 @@ ConvSSL
     - clone repo, cd to repo, and install dependencies: `pip install -r requirements.txt`
     - install repo: `pip install -e .`
 * cd into this repo and install conv_ssl: `pip install -e .`
+
+
+## Pretrained Encoders
+
+The pretrained encoder checkpoints are downloaded from the original repos (see tree-structure above for paths)
+or from torch.hub through torchaudio.
+
+* [WavLM-Base & WavLM-Base+](https://github.com/microsoft/unilm/tree/master/wavlm)
+  - download the checkpoints
+* [CPC](https://github.com/facebookresearch/CPC_audio)
+  - requires installation of source
+  - that is clone [CPC_audio](https://github.com/facebookresearch/CPC_audio), cd to repo, run `python setup.py develop`
+  - **automatically** downloads checkpoints
+* [Hubert & Wav2vec2](https://pytorch.org/audio/stable/models.html#wav2vec2-0-hubert) are downloaded through `torchaudio` (downloads to `~/.cache/torch/hub/checkpoints/` by default)
+
+```python
+from torchaudio.pipelines import HUBERT_BASE, WAV2VEC2_BASE
+#Hubert
+model = HUBERT_BASE.get_model()
+# or
+model = WAV2VEC2_BASE.get_model()
+```
 
 
 ## Train ULM Only (precompute units and save to disk)
