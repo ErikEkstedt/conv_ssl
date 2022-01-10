@@ -1,17 +1,11 @@
 from argparse import ArgumentParser
-from os import makedirs
-from os.path import join
-
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
-
-from conv_ssl.train import add_standard_callbacks
-from conv_ssl.ulm_projection import ULMProjection
-from conv_ssl.models import ProjectionMetricCallback
 from conv_ssl.callbacks import AnimationCallback
 from conv_ssl.dm_units import SegmentDM, SegmentDataset
+from conv_ssl.models import ProjectionMetricCallback
+from conv_ssl.train import add_standard_callbacks
+from conv_ssl.ulm_projection import ULMProjection
 from conv_ssl.utils import count_parameters
 
 import wandb
