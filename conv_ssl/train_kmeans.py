@@ -106,6 +106,8 @@ class SegmentDatasetBuilder:
 
     def _load_datamodule(self):
         data_conf = DialogAudioDM.load_config(path=self.args.data_conf, args=self.args)
+        data_conf["dataset"]["type"] = "sliding"
+        data_conf["dataset"]["audio_overlap"] = 9  # 10 second windows
         dm = DialogAudioDM(
             datasets=data_conf["dataset"]["datasets"],
             type=data_conf["dataset"]["type"],
