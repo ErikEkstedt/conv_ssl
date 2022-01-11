@@ -8,6 +8,6 @@ encoder:
 quantizer:
   use: 0
   type: kmeans # VQ
-  vector_path: dataset_units/wavlm_base+/k_vectors.pt
+  vector_path: null
   n_codes: 100
-  dim: 256
+  dim: 768
