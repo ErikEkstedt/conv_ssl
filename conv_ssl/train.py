@@ -9,7 +9,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 from conv_ssl.models import ProjectionMetricCallback
 from conv_ssl.ulm_projection import ULMProjection
-from conv_ssl.callbacks import AnimationCallback
 
 from datasets_turntaking.dm_dialog_audio import (
     DialogAudioDM,
@@ -26,11 +25,62 @@ PROJECT = "ULMProjection"
 SAVEDIR = "runs/conv_ssl/ULMProjection"
 
 
+class AnimationCallback(pl.Callback):
+    def __init__(
+        self,
+        sample_dset,
+        n_ani=-1,
+        frame_step=5,
+        start_epoch=1,
+        cache_path="/tmp/vad_animation",
+    ):
+        super().__init__()
+        self.n_ani = n_ani
+        self.sample_dset = sample_dset
+        self.start_epoch = start_epoch
+        self.cache_path = cache_path
+        self.frame_step = frame_step
+
+    def create_animations(self, model):
+        paths = []
+        for i, d in tqdm(
+            enumerate(self.sample_dset), desc="Animation", total=self.n_ani
+        ):
+            if self.n_ani > 0 and i == self.n_ani:
+                break
+
+            path = join(self.cache_path, f"ani_{i}.mp4")
+            model.animate_sample(
+                input_ids=d["q"],
+                waveform=d["waveform"],
+                vad=d["vad"],
+                frame_step=self.frame_step,
+                path=path,
+            )
+            paths.append(path)
+        return paths
+
+    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+        if trainer.current_epoch < self.start_epoch:
+            return None
+
+        paths = self.create_animations(model=pl_module)
+        for i, p in enumerate(paths):
+            wandb.log(
+                {
+                    f"animation_{i}": wandb.Video(
+                        data_or_path=paths[i], fps=10, format="mp4"
+                    )
+                }
+            )
+        return None
+
+
 def add_standard_callbacks(name, args, model, callbacks):
     makedirs(SAVEDIR, exist_ok=True)
     logger = WandbLogger(
         save_dir=SAVEDIR,
-        project=PROJECT,
+        project=PROJECT + args.project_info,
         name=name + args.name_info,
         log_model=True,
     )
@@ -44,7 +94,7 @@ def add_standard_callbacks(name, args, model, callbacks):
         ModelCheckpoint(
             dirpath=ch_path,
             filename="{epoch}-{val_loss:.5f}",
-            save_top_k=2,
+            save_top_k=1,
             mode="min",
             monitor="val_loss",
         )
@@ -92,8 +142,10 @@ def train():
     parser = pl.Trainer.add_argparse_args(parser)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--name_info", type=str, default="")
+    parser.add_argument("--project_info", type=str, default="")
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--log_gradients", action="store_true")
+    parser.add_argument("--animation", action="store_true")
     parser.add_argument("--animation_epoch_start", default=10, type=int)
     parser.add_argument("--animation_n", default=10, type=int)
     args = parser.parse_args()
@@ -145,7 +197,9 @@ def train():
     # this should be handled automatically with pytorch_lightning?
     if not args.fast_dev_run:
         logger, callbacks = add_standard_callbacks(name, args, model, callbacks)
-        callbacks = add_animator_callback(args, callbacks)
+
+        if args.animation:
+            callbacks = add_animator_callback(args, callbacks)
 
     # Trainer
     # args.auto_lr_find = True

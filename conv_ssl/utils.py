@@ -1,32 +1,8 @@
 from omegaconf import OmegaConf
-from os.path import exists, join, dirname
+from os.path import dirname
 import torch
 from torch.nn.utils.rnn import pad_sequence
 import json
-
-
-def get_checkpoint_path(
-    artifact, artifact_dir="./artifacts", project_url="how_so/ULMProjection"
-):
-    checkpoint = join(artifact_dir, artifact, "model.ckpt")
-    if not exists(checkpoint):
-        import wandb
-
-        # URL: always '/'
-        artifact_path = project_url + "/" + artifact
-        with wandb.init() as run:
-            artifact = run.use_artifact(artifact_path, type="model")
-            _ = artifact.download()
-    return checkpoint
-
-
-def load_metadata(path="/how_so/ULMProjection/runs/3qt6whg9"):
-    import wandb
-
-    api = wandb.Api()
-    run = api.run(path)
-    print(run.history())
-    return run
 
 
 def repo_root():

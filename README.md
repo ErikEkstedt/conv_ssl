@@ -41,11 +41,13 @@ ConvSSL
 * Create conda env: `conda create -n conv_ssl python=3`
   - source env: `conda source conv_ssl`
 * PyTorch: `conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch`
+* [Optional] (for videos) Install FFMPEG: `conda install -c conda-forge ffmpeg`
 * Dependencies: `pip install -r requirements.txt`
+* install conv_ssl: `pip install -e .`
 * Install [Datasets turn-taking](https://github.com/ErikEkstedt/datasets_turntaking)
-    - clone repo, cd to repo, and install dependencies: `pip install -r requirements.txt`
+    - clone repo `git clone https://github.com/ErikEkstedt/datasets_turntaking.git`
+    - cd to repo, and install dependencies: `pip install -r requirements.txt`
     - install repo: `pip install -e .`
-* cd into this repo and install conv_ssl: `pip install -e .`
 
 
 ## Pretrained Encoders

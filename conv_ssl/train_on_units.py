@@ -1,10 +1,9 @@
 from argparse import ArgumentParser
 import pytorch_lightning as pl
 
-from conv_ssl.callbacks import AnimationCallback
 from conv_ssl.dm_units import SegmentDM, SegmentDataset
 from conv_ssl.models import ProjectionMetricCallback
-from conv_ssl.train import add_standard_callbacks
+from conv_ssl.train import AnimationCallback, add_standard_callbacks
 from conv_ssl.ulm_projection import ULMProjection
 from conv_ssl.utils import count_parameters
 
@@ -31,8 +30,10 @@ def train_on_units():
     parser = pl.Trainer.add_argparse_args(parser)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--name_info", type=str, default="")
+    parser.add_argument("--project_info", type=str, default="")
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--log_gradients", action="store_true")
+    parser.add_argument("--animation", action="store_true")
     parser.add_argument("--animation_epoch_start", default=10, type=int)
     parser.add_argument("--animation_n", default=10, type=int)
     args = parser.parse_args()
@@ -75,9 +76,10 @@ def train_on_units():
     if not args.fast_dev_run:
         logger, callbacks = add_standard_callbacks(name, args, model, callbacks)
         if not model.conf["vad_class_prediction"]["regression"]:
-            callbacks = add_animator_callback(
-                k=conf["quantizer"]["n_codes"], args=args, callbacks=callbacks
-            )
+            if args.animation:
+                callbacks = add_animator_callback(
+                    k=conf["quantizer"]["n_codes"], args=args, callbacks=callbacks
+                )
 
     # Trainer
     # args.auto_lr_find = True

@@ -1,16 +1,19 @@
 from os.path import join
 from typing import Any, Dict
+import matplotlib as mpl
 
 import torch
 import pytorch_lightning as pl
+
+mpl.use("Agg")
 
 from conv_ssl.models import ProjectionModel, EncoderPretrained, CHECKPOINTS, MODEL_HZ
 from conv_ssl.vad_pred_animation import VadPredAnimator
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
-DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/ulm.yaml")
+DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/ulm_wavlm.yaml")
 
-# The complete model with an Encoder (could be pretrained) and the ULMProjectionModel
+
 class ULMProjection(pl.LightningModule):
     def __init__(self, conf):
         super().__init__()
@@ -93,16 +96,16 @@ class ULMProjection(pl.LightningModule):
         frame_step=5,  # 50 hz
         path="/tmp/ulm_projection_vid.mp4",
     ):
-        assert waveform.ndim == 1, "waveform must be (N_s, )"
-        assert input_ids.ndim == 1, "input_ids must be (N, )"
         assert vad.ndim == 2, "input_ids must be (N, 2)"
 
         if input_ids is not None:
+            assert input_ids.ndim == 1, "input_ids must be (N, )"
             out = self(
                 input_ids=input_ids.unsqueeze(0).to(self.device),
                 vad=vad.unsqueeze(0).to(self.device),  # add batch and move to device
             )
         else:
+            assert waveform.ndim == 1, "waveform must be (N_s, )"
             out = self(
                 waveform=waveform.unsqueeze(0).to(self.device),
                 vad=vad.unsqueeze(0).to(self.device),  # add batch and move to device
@@ -125,6 +128,16 @@ class ULMProjection(pl.LightningModule):
         return path
 
     def shared_step(self, batch):
+        """
+        Arguments:
+            batch:      dict, containing 'waveform' or 'q' (input_ids), vad, vad_history
+
+        Returns:
+            loss:       torch.Tensor
+            out:        dict
+            batch:      same as input arguments (fixed for differenct encoder Hz)
+            batch_size: int, size of batch
+        """
         if "q" in batch:  # check if precomputed indices are available
             vad_history = None
             if "vad_history" in batch:
@@ -174,20 +187,24 @@ class ULMProjection(pl.LightningModule):
                 self.conf["quantizer"]["vector_path"], map_location="cpu"
             )
 
-    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-        """
-        If the model was trained without an encoder (directly on units) we
-        load the encoder/quantizer (with appropriate weights, see `on_save_checkpoint`)
-
-        Such that we can use it directly on waveforms etc
-        """
-        if not self.conf["encoder"]["use"]:
-            print("==============")
-            self.encoder = self._build_encoder(
-                checkpoint["hyper_parameters"]["conf"], load=True
-            )
-            print("Loaded Encoder")
-            print("==============")
+    # WARNING: this is not done on "model.load_from_checkpoint" but during training
+    # def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+    #     """
+    #     If the model was trained without an encoder (directly on units) we
+    #     load the encoder/quantizer (with appropriate weights, see `on_save_checkpoint`)
+    #
+    #     Such that we can use it directly on waveforms etc
+    #     """
+    #
+    #     # the weights are saved in checkpoint so no need to load from disk
+    #     self.conf["encoder"]["quantizer"]["vector_path"] = None
+    #     if not self.conf["encoder"]["use"]:
+    #         print("==============")
+    #         self.encoder = self._build_encoder(
+    #             checkpoint["hyper_parameters"]["conf"], load=True
+    #         )
+    #         print("Loaded Encoder")
+    #         print("==============")
 
     def configure_optimizers(self):
         return torch.optim.AdamW(
@@ -250,6 +267,51 @@ class ULMProjection(pl.LightningModule):
         default_conf = ULMProjection.load_config(format=None)
         parser = OmegaConfArgs.add_argparse_args(parser, default_conf)
         return parent_parser
+
+
+def ani_debug():
+
+    from argparse import ArgumentParser
+    from datasets_turntaking.dm_dialog_audio import (
+        DialogAudioDM,
+        DialogIPU,
+        get_dialog_audio_datasets,
+        print_dm,
+    )
+
+    parser = ArgumentParser()
+    parser = DialogAudioDM.add_data_specific_args(parser)
+    parser = ULMProjection.add_model_specific_args(parser)
+    args = parser.parse_args()
+    data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
+    # data_conf["dataset"]["type"] = "sliding"
+    print_dm(data_conf, args)
+
+    data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
+    val_hf_dataset = get_dialog_audio_datasets(
+        datasets=data_conf["dataset"]["datasets"], split="val"
+    )
+    sample_dset = DialogIPU(
+        dataset=val_hf_dataset,
+        audio_duration=data_conf["dataset"]["audio_duration"],
+        audio_normalize=data_conf["dataset"]["audio_normalize"],
+        sample_rate=data_conf["dataset"]["sample_rate"],
+        vad_hop_time=data_conf["dataset"]["vad_hop_time"],
+        vad_bin_sizes=data_conf["dataset"]["vad_bin_sizes"],
+    )
+
+    diter = iter(sample_dset)
+
+    conf = ULMProjection.load_config(path=args.conf, args=args)
+    model = ULMProjection(conf)
+
+    batch = next(diter)
+
+    for k, v in batch.items():
+        if isinstance(v, torch.Tensor):
+            print(f"{k}: {tuple(v.shape)}")
+        else:
+            print(f"{k}: {v}")
 
 
 if __name__ == "__main__":
