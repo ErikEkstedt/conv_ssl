@@ -187,25 +187,6 @@ class ULMProjection(pl.LightningModule):
                 self.conf["quantizer"]["vector_path"], map_location="cpu"
             )
 
-    # WARNING: this is not done on "model.load_from_checkpoint" but during training
-    # def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-    #     """
-    #     If the model was trained without an encoder (directly on units) we
-    #     load the encoder/quantizer (with appropriate weights, see `on_save_checkpoint`)
-    #
-    #     Such that we can use it directly on waveforms etc
-    #     """
-    #
-    #     # the weights are saved in checkpoint so no need to load from disk
-    #     self.conf["encoder"]["quantizer"]["vector_path"] = None
-    #     if not self.conf["encoder"]["use"]:
-    #         print("==============")
-    #         self.encoder = self._build_encoder(
-    #             checkpoint["hyper_parameters"]["conf"], load=True
-    #         )
-    #         print("Loaded Encoder")
-    #         print("==============")
-
     def configure_optimizers(self):
         return torch.optim.AdamW(
             self.parameters(),
@@ -262,6 +243,7 @@ class ULMProjection(pl.LightningModule):
         """argparse arguments for SoSIModel (based on yaml-config)"""
         parser = parent_parser.add_argument_group("ULMProjection")
         parser.add_argument("--conf", default=None, type=str)
+        parser.add_argument("--dont_log_model", action="store_true")
 
         # A workaround for OmegaConf + WandB-Sweeps
         default_conf = ULMProjection.load_config(format=None)

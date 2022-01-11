@@ -82,7 +82,7 @@ def add_standard_callbacks(name, args, model, callbacks):
         save_dir=SAVEDIR,
         project=PROJECT + args.project_info,
         name=name + args.name_info,
-        log_model=True,
+        log_model=not args.dont_log_model,
     )
 
     if args.log_gradients:
@@ -208,7 +208,6 @@ def train():
         args=args, logger=logger, callbacks=callbacks
     )
     # auto_finder = trainer.tune(model, dm)["lr_find"]
-
     trainer.fit(model, datamodule=dm)
 
 
