@@ -85,8 +85,10 @@ class ULMProjection(pl.LightningModule):
         out.update(o)
         return out
 
-    def calc_losses(self, out, vad_labels, input_ids):
-        return self.ulm_projection.calc_losses(out, vad_labels, input_ids)
+    def calc_losses(self, out, vad_labels, input_ids, reduction="mean"):
+        return self.ulm_projection.calc_losses(
+            out, vad_labels, input_ids, reduction=reduction
+        )
 
     def animate_sample(
         self,
@@ -127,7 +129,17 @@ class ULMProjection(pl.LightningModule):
         ani.save_animation(path)
         return path
 
-    def shared_step(self, batch):
+    def fix_batch_hz(self, batch):
+        if MODEL_HZ[self.encoder.name] == 50:
+            batch["vad"] = self.encoder.hz_100_to_50(batch["vad"])[:, :-1]
+            batch["vad_label"] = self.encoder.hz_100_to_50(batch["vad_label"])[:, :-1]
+            if "vad_history" in batch:
+                batch["vad_history"] = self.encoder.hz_100_to_50(batch["vad_history"])[
+                    :, :-1
+                ]
+        return batch
+
+    def shared_step(self, batch, reduction="mean"):
         """
         Arguments:
             batch:      dict, containing 'waveform' or 'q' (input_ids), vad, vad_history
@@ -146,16 +158,7 @@ class ULMProjection(pl.LightningModule):
             input_ids = batch["q"]
         else:
             # If dataset have units it has also changed the VAD so only do this here
-            if MODEL_HZ[self.encoder.name] == 50:
-                batch["vad"] = self.encoder.hz_100_to_50(batch["vad"])[:, :-1]
-                batch["vad_label"] = self.encoder.hz_100_to_50(batch["vad_label"])[
-                    :, :-1
-                ]
-                if "vad_history" in batch:
-                    batch["vad_history"] = self.encoder.hz_100_to_50(
-                        batch["vad_history"]
-                    )[:, :-1]
-
+            batch = self.fix_batch_hz(batch)
             vad_history = None
             if "vad_history" in batch:
                 vad_history = batch["vad_history"]
@@ -165,7 +168,9 @@ class ULMProjection(pl.LightningModule):
             input_ids = out["input_ids"]
 
         batch_size = input_ids.shape[0]
-        loss = self.calc_losses(out, input_ids=input_ids, vad_labels=batch["vad_label"])
+        loss = self.calc_losses(
+            out, input_ids=input_ids, vad_labels=batch["vad_label"], reduction=reduction
+        )
         return loss, out, batch, batch_size
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:

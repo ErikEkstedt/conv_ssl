@@ -124,18 +124,25 @@ class ProjectionModel(nn.Module):
             loss_ar = einops.rearrange(loss_ar, "(b n) -> b n", n=n)
         return loss_ar
 
-    def calc_losses(self, out, vad_labels, input_ids=None):
+    def calc_losses(self, out, vad_labels, input_ids=None, reduction="mean"):
         loss = {}
 
         # Calculate Projection Loss
         loss["vp"] = self.projection_head.loss_function(
-            logits=out["logits_vp"], labels=vad_labels
+            logits=out["logits_vp"], labels=vad_labels, reduction=reduction
         )
 
         # Calculate AR (ULM) Loss
         if self.conf["tier1"]["num_layers"] > 0 and input_ids is not None:
-            loss["ar"] = self.calc_loss_ar(out["logits_ar"], input_ids)
-            loss["total"] = self.alpha * loss["vp"] + (1 - self.alpha) * loss["ar"]
+            loss["ar"] = self.calc_loss_ar(
+                out["logits_ar"], input_ids, reduction=reduction
+            )
+            if reduction == "none":
+                loss["total"] = (
+                    self.alpha * loss["vp"][:, :-1] + (1 - self.alpha) * loss["ar"]
+                )
+            else:
+                loss["total"] = self.alpha * loss["vp"] + (1 - self.alpha) * loss["ar"]
         else:
             loss["total"] = loss["vp"]
         return loss

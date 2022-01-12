@@ -282,7 +282,8 @@ class ActivityProjectionHead(nn.Module):
                 reduction=reduction,
             )
             if reduction == "none":
-                loss = einops.rearrange(loss, "(b n) -> b n")
+                n = logits.shape[1]
+                loss = einops.rearrange(loss, "(b n) -> b n", n=n)
         return loss
 
     def prepare_discrete(self, logits, vad, vad_label, k=5):
