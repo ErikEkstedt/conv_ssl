@@ -95,15 +95,19 @@ def add_standard_callbacks(name, args, model, callbacks):
             dirpath=ch_path,
             filename="{epoch}-{val_loss:.5f}",
             save_top_k=1,
-            mode="min",
-            monitor="val_loss",
+            # mode="min",
+            # monitor="val_loss",
+            monitor="val/f1_weighted",
+            mode="max",
         )
     )
     print(f"Early stopping (patience={args.patience})")
 
     callbacks.append(
         EarlyStopping(
-            monitor="val_loss_vp",
+            # monitor="val_loss_vp",
+            monitor="val/f1_weighted",
+            mode="max",
             patience=args.patience,
             strict=True,  # crash if "monitor" is not found in val metrics
             verbose=True,
