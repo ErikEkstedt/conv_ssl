@@ -44,7 +44,7 @@ def get_memory(x, size_type="gb"):
 class SegmentDatasetBuilder:
     def __init__(self, args) -> None:
         self.args = args
-        self.model = None
+        self.encoder = None
         self.model_config = EncoderPretrained.load_config(args.conf)
         self.dm = self._load_datamodule()
         self.paths = self._filepaths()
@@ -83,8 +83,8 @@ class SegmentDatasetBuilder:
         }
 
     def save_configs(self):
-        if self.model is not None:
-            OmegaConf.save(self.model.conf, self.paths["conf_model"])
+        if self.encoder is not None:
+            OmegaConf.save(self.encoder.conf, self.paths["conf_model"])
             print("Saved Model config -> ", self.paths["conf_model"])
 
         # DM conf
@@ -134,8 +134,8 @@ class SegmentDatasetBuilder:
     def extract_sample_features_for_kmeans(self):
         """Extracts features (to RAM) with possibility to save to disk"""
         # always extract features from the training set
-        if self.model is None:
-            self.model = self._load_model()
+        if self.encoder is None:
+            self.encoder = self._load_model()
 
         pbar = tqdm(
             total=int(self.args.kmeans_max_feature_memory * 1000),
@@ -149,7 +149,7 @@ class SegmentDatasetBuilder:
         all_feats = []
         isnan = 0
         for batch in self.dm.train_dataloader():
-            feats = self.model.encode(batch["waveform"].to(self.model.device))
+            feats = self.encoder.encode(batch["waveform"].to(self.encoder.device))
             if feats.isnan().sum() > 0:
                 isnan += 1
                 continue
@@ -216,8 +216,8 @@ class SegmentDatasetBuilder:
         self, quantizer, dataloader, root, with_audio_root=None, n_audio=20
     ):
         # Load model if necesary
-        if self.model is None:
-            self.model = self._load_model()
+        if self.encoder is None:
+            self.encoder = self._load_model()
 
         i, n_batch, n_audio_done = 0, 0, 0
         isnan = 0
@@ -225,28 +225,14 @@ class SegmentDatasetBuilder:
         spinner.start()
         for batch in dataloader:
 
-            feats = self.model.encode(batch["waveform"].to(self.model.device))
+            feats = self.encoder.encode(batch["waveform"].to(self.encoder.device))
             if feats.isnan().sum() > 0:
                 isnan += 1
                 continue
 
             _, qidx = quantizer(feats)
 
-            # handle different Hz. VadPred is 100hz (10ms) and hubert/wav2vec2 is 50hz (20ms)
-            if self.model.name in ["hubert_base", "wav2vec2_base"]:
-                # hubert_base is twice as slow as vadpred-features
-                # so we use the last frame from vadpred for each step of hubert
-                # e.g. x is the chosen label frame
-                # vadpred:   | |x| |x| |x|
-                # hubert :   |   |   |   |
-                # frame  :   |0|1|2|3|4|5|
-                # hubert :   | 0 | 1 | 2 |
-                batch["vad_label"] = batch["vad_label"][:, 1::2]  # use the last frame
-                batch["vad"] = batch["vad"][:, 1::2]  # use the last frame
-                batch["vad_history"] = batch["vad_history"][
-                    :, 1::2
-                ]  # use the last frame
-
+            batch = self.encoder.fix_batch_hz(batch)
             do_audio = True  # flag to take audio_samples from different batch
             # save each dialog segment
             for j, q_tmp in enumerate(qidx):

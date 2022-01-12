@@ -130,14 +130,7 @@ class ULMProjection(pl.LightningModule):
         return path
 
     def fix_batch_hz(self, batch):
-        if MODEL_HZ[self.encoder.name] == 50:
-            batch["vad"] = self.encoder.hz_100_to_50(batch["vad"])[:, :-1]
-            batch["vad_label"] = self.encoder.hz_100_to_50(batch["vad_label"])[:, :-1]
-            if "vad_history" in batch:
-                batch["vad_history"] = self.encoder.hz_100_to_50(batch["vad_history"])[
-                    :, :-1
-                ]
-        return batch
+        return self.encoder.fix_batch_hz(batch)
 
     def shared_step(self, batch, reduction="mean"):
         """
