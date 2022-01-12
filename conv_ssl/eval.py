@@ -1,11 +1,12 @@
 from os.path import join, exists, basename, dirname
 import torch
 import wandb
+from tqdm import tqdm
 
 import pytorch_lightning as pl
 
 from conv_ssl.ulm_projection import ULMProjection
-from conv_ssl.models import ProjectionMetricCallback
+from conv_ssl.models import ProjectionMetricCallback, ProjectionMetrics
 
 
 def run_path_to_project_id(run_path):
@@ -102,39 +103,132 @@ def load_dm(split="val", batch_size=10, vad_history=True):
         return dm.val_dataloader()
 
 
-def eval(model, dloader):
+def trainer_eval(model, dloader):
     trainer = pl.Trainer(callbacks=[ProjectionMetricCallback()], gpus=-1)
     return trainer.test(model, dataloaders=dloader)
 
 
-# iterate over test-set
-# find N highest/lowest loss samples
-# -> create animation of those
+@torch.no_grad()
+def manual_eval(model, dloader, n_high=10, n_low=5, max_iter=-1):
+    def to_device(batch, device="cuda"):
+        new_batch = {}
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                new_batch[k] = v.to(device)
+            else:
+                new_batch[k] = v
+        return new_batch
+
+    def get_sample_from_dict(i, batch):
+        sample = {}
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                sample[k] = v[i].unsqueeze(0).cpu()  # add batch dim
+            elif isinstance(v, list):
+                sample[k] = [v[i]]
+            else:
+                sample[k] = v[i]
+        return sample
+
+    assert n_high > 0
+    assert n_low > 0
+
+    model.eval()
+
+    metrics = ProjectionMetrics()
+    avg_loss = {"vp": [], "ar": [], "total": []}
+    losses = {
+        "low": torch.ones(n_low, device=model.device) * 9999,
+        "high": torch.ones(n_high, device=model.device) * -9999,
+    }
+    outs = {"low": [None] * n_low, "high": [None] * n_high}
+    samples = {"low": [None] * n_low, "high": [None] * n_high}
+
+    metrics.reset()
+
+    if max_iter > 0:
+        pbar = tqdm(enumerate(dloader), total=max_iter)
+    else:
+        pbar = enumerate(dloader)
+
+    for n_batch, batch in pbar:
+        batch = to_device(batch, device=model.device)
+        loss, out, batch, _ = model.shared_step(batch, reduction="none")
+
+        # Metrics Update
+        outputs = model.projection_head.prepare_metrics(
+            logits=out["logits_vp"],
+            vad=batch["vad"],
+            vad_label=batch["vad_label"],
+            min_context_frames=50,
+            k=5,
+        )
+        metrics.update(outputs)
+
+        batch_loss = loss["vp"].mean(dim=-1)  # (B,)
+        avg_loss["total"].append(loss["total"].mean().cpu())
+        avg_loss["vp"].append(loss["vp"].mean().cpu())
+        if "ar" in loss:
+            avg_loss["ar"].append(loss["ar"].mean().cpu())
+
+        for i, tmp_l in enumerate(batch_loss):
+            # Update low losses
+            less = torch.where(tmp_l < losses["low"])[0]
+            if len(less) > 0:
+                update = losses["low"][less].argmax()  # update the highest
+                losses["low"][update] = tmp_l
+                samples["low"][update] = get_sample_from_dict(i, batch)
+                outs["low"][update] = get_sample_from_dict(i, out)
+
+            # Update high losses
+            greater = torch.where(tmp_l > losses["high"])[0]
+            if len(greater) > 0:
+                update = losses["high"][greater].argmin()  # update the lowest
+                losses["high"][update] = tmp_l
+                samples["high"][update] = get_sample_from_dict(i, batch)
+                outs["high"][update] = get_sample_from_dict(i, out)
+
+        if max_iter > 0 and n_batch >= max_iter:
+            break
+
+    for k, v in avg_loss.items():
+        if len(v) > 0:
+            avg_loss[k] = torch.stack(v).mean()
+
+    result = metrics.compute()
+    return {
+        "outs": outs,
+        "samples": samples,
+        "losses": losses,
+        "avg_loss": avg_loss,
+        "result": result,
+    }
 
 
 if __name__ == "__main__":
-
-    run_path = "how_so/ULMProjection_delete/20qbod08"
+    run_path = "how_so/ULMProjection/1er9zvt6"
     checkpoint_path = get_checkpoint(run_path, version="v0")
-    # checkpoint = torch.load(checkpoint_path)
-    # conf = checkpoint["hyper_parameters"]["conf"]
+    checkpoint = torch.load(checkpoint_path)
+    conf = checkpoint["hyper_parameters"]["conf"]
     metadata = load_metadata(run_path)
     model = ULMProjection.load_from_checkpoint(checkpoint_path)
-    dloader = load_dm()
+    dloader = load_dm(batch_size=4)
+    if torch.cuda.is_available():
+        model = model.to("cuda")
 
     # Evaluate over entire dataloader
-    out_test = eval(model, dloader)
-    for k, v in out_test[0].items():
+    # out_test = trainer_eval(model, dloader)
+    result = manual_eval(model, dloader, n_low=2, n_high=6, max_iter=100)
+    for k, v in result["result"].items():
         print(f"{k}: {v}")
 
-    # animation
-    batch = next(iter(dloader))
-    loss, out, batch, batch_size = model.shared_step(batch)
-
-    # Requires FFMPEG: `conda install -c conda-forge ffmpeg`
+    # # Requires FFMPEG: `conda install -c conda-forge ffmpeg`
+    # # animation
+    # batch = next(iter(dloader))
+    # loss, out, batch, batch_size = model.shared_step(batch, reduction="none")
     model.animate_sample(
-        waveform=batch["waveform"][0],
-        vad=batch["vad"][0],
+        waveform=result["samples"]["high"][0]["waveform"][0],
+        vad=result["samples"]["high"][0]["vad"][0],
         frame_step=5,  # 50 hz
         path="ulm_projection_vid.mp4",
     )
