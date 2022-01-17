@@ -6,7 +6,8 @@ metric:
   name: val_loss
   goal: minimize
 parameters:
-  encoder.type: ['wav2vec', 'vq_wav2vec', 'hubert', 'wavlm_base+']
+  encoder.type: 
+     values: [wav2vec, vq_wav2vec, hubert, wavlm_base+]
   tier2.num_layers:
     values: [1, 2]
 command:
@@ -30,10 +31,8 @@ command:
   - "0"
   - "--tier1.num_layers"
   - "0"
-  - "--tier1.num_heads"
+  - "--tier2.num_heads"
   - "4"
   - "--tier2.dim"
   - "256"
-  - "--conf" 
-  - "conv_ssl/config/ulm_wavlm.yaml"
   - ${args}
