@@ -1,8 +1,16 @@
 import pytest
 from os.path import join
+import torch
 from datasets_turntaking.dm_dialog_audio import DialogAudioDM
 from conv_ssl.ulm_projection import ULMProjection
 from conv_ssl.utils import repo_root
+
+
+def to_device(batch, device="cuda"):
+    for k, v in batch.items():
+        if isinstance(v, torch.Tensor):
+            batch[k] = v.to(device)
+    return batch
 
 
 @pytest.fixture
@@ -71,6 +79,10 @@ def test_ulm_projection_encoders(batch, name):
     conf["tier1"]["num_layers"] = 0
     conf["tier2"]["num_layers"] = 1
     model = ULMProjection(conf)
+
+    if torch.cuda.is_available():
+        model.to("cuda")
+        batch = to_device(batch, "cuda")
     _ = model.shared_step(batch)
 
 
