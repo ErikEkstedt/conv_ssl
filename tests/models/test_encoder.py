@@ -23,8 +23,10 @@ def test_encoder(name):
         conf_path = join(conf_path, "ulm_wav2vec2.yaml")
     elif name == "wavlm_base+":
         conf_path = join(conf_path, "ulm_wavlm.yaml")
-    else:
+    elif name == "cpc":
         conf_path = join(conf_path, "ulm_cpc.yaml")
+    else:
+        assert False, "{name} does not exist"
 
     conf = EncoderPretrained.load_config(conf_path)
     conf["encoder"]["output_layer"] = 6

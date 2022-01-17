@@ -23,7 +23,7 @@ class ULMProjection(pl.LightningModule):
         self.encoder = self._build_encoder()
 
         # ULMProjection
-        self.ulm_projection = ProjectionModel(conf)
+        self.ulm_projection = ProjectionModel(self.conf)
 
         # Training params
         self.learning_rate = conf["optimizer"]["learning_rate"]
@@ -38,7 +38,10 @@ class ULMProjection(pl.LightningModule):
         if conf is None:
             conf = self.conf
         if conf["encoder"]["pretrained"]:
-            return EncoderPretrained(conf, load=load)
+            encoder = EncoderPretrained(conf, load=load)
+            # update dimension of encoder
+            self.conf["encoder"]["dim"] = encoder.conf["encoder"]["dim"]
+            return encoder
         else:
             raise NotImplementedError("implement end-to-end training")
 

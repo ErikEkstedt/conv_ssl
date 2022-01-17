@@ -11,12 +11,22 @@ from conv_ssl.utils import load_config, repo_root
 DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/ulm.yaml")
 MODEL_HZ = {
     "hubert_base": 50,
-    "wav2vec2": 50,
+    "wav2vec2_base": 50,
     "wavlm_base": 50,
     "wavlm_base+": 50,
     "wav2vec": 100,
     "vq_wav2vec": 100,
     "cpc": 100,
+}
+
+MODEL_DIM = {
+    "hubert_base": 768,
+    "wav2vec2_base": 768,
+    "wavlm_base": 768,
+    "wavlm_base+": 768,
+    "wav2vec": 512,
+    "vq_wav2vec": 512,
+    "cpc": 256,
 }
 
 
@@ -28,8 +38,7 @@ class EncoderPretrained(nn.Module):
 
     def __init__(self, conf, load=False, freeze=True):
         super().__init__()
-        self.conf = {"encoder": conf["encoder"]}
-        self.conf["quantizer"] = conf["quantizer"]
+        self.conf = self.encoder_conf(conf)
         self.frame_hz = conf["encoder"]["frame_hz"]
 
         # Encoder: Hubert (torchaudio) `output_layer` defines which representations to use
@@ -47,6 +56,13 @@ class EncoderPretrained(nn.Module):
 
         if freeze:
             self.freeze()
+
+    def encoder_conf(self, conf):
+        enc_conf = {"encoder": conf["encoder"]}
+        enc_conf["quantizer"] = conf["quantizer"]
+        enc_conf["encoder"]["dim"] = MODEL_DIM[conf["encoder"]["type"]]
+        enc_conf["encoder"]["frame_hz"] = MODEL_HZ[conf["encoder"]["type"]]
+        return enc_conf
 
     @property
     def name(self):

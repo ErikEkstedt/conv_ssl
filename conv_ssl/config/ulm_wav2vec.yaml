@@ -1,9 +1,7 @@
 encoder:
   pretrained: true
-  output_layer: 1 # 0 gives z enc and > 0 gives c
+  output_layer: 6 # 0 gives z enc and > 0 gives c
   type: wav2vec
-  dim: 512
-  frame_hz: 100 # Hz
 
 quantizer:
   type: kmeans # VQ

@@ -2,8 +2,6 @@ encoder:
   pretrained: true
   output_layer: 6
   type: vq_wav2vec
-  dim: 512
-  frame_hz: 50 # Hz
 
 quantizer:
   type: kmeans # VQ
