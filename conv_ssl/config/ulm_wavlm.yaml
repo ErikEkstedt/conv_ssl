@@ -2,13 +2,13 @@ encoder:
   pretrained: true
   output_layer: 6
   type: wavlm_base+
+  dim: 768
   frame_hz: 50 # Hz
 
 quantizer:
   type: kmeans # VQ
   vector_path: dataset_units/wavlm_base+/k_vectors.pt
   n_codes: 100
-  dim: 768
 
 tier1:
   type: 'transformer'

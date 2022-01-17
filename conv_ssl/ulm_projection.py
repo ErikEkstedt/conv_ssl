@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 
 mpl.use("Agg")
 
-from conv_ssl.models import ProjectionModel, EncoderPretrained, CHECKPOINTS, MODEL_HZ
+from conv_ssl.models import ProjectionModel, EncoderPretrained, CHECKPOINTS
 from conv_ssl.vad_pred_animation import VadPredAnimator
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
@@ -66,15 +66,17 @@ class ULMProjection(pl.LightningModule):
         s += f"\ttype: {self.conf['encoder']['type']}\n"
         s += f"\toutput_layer: {self.conf['encoder']['output_layer']}\n"
         s += f"\tHz: {self.conf['encoder']['frame_hz']}\n"
-        s += f"\tquantizer: {self.conf['quantizer']['n_codes']}\n"
-        s += "Tier1\n"
-        s += f"\tnum_layers: {self.conf['tier1']['num_layers']}\n"
-        s += f"\tnum_heads: {self.conf['tier1']['num_heads']}\n"
-        s += f"\tdim: {self.conf['tier1']['dim']}\n"
-        s += "Tier2\n"
-        s += f"\tnum_layers: {self.conf['tier2']['num_layers']}\n"
-        s += f"\tnum_heads: {self.conf['tier2']['num_heads']}\n"
-        s += f"\tdim: {self.conf['tier2']['dim']}\n"
+        s += f"\tquantizer n_codes: {self.conf['quantizer']['n_codes']}\n"
+        if self.ulm_projection.tier1 is not None:
+            s += "Tier1\n"
+            s += f"\tnum_layers: {self.conf['tier1']['num_layers']}\n"
+            s += f"\tnum_heads: {self.conf['tier1']['num_heads']}\n"
+            s += f"\tdim: {self.conf['tier1']['dim']}\n"
+        if self.ulm_projection.tier2 is not None:
+            s += "Tier2\n"
+            s += f"\tnum_layers: {self.conf['tier2']['num_layers']}\n"
+            s += f"\tnum_heads: {self.conf['tier2']['num_heads']}\n"
+            s += f"\tdim: {self.conf['tier2']['dim']}\n"
         s += "Head\n"
         s += f"\tregression: {self.conf['vad_class_prediction']['regression']}\n"
         return s
@@ -95,12 +97,17 @@ class ULMProjection(pl.LightningModule):
         ), "must provide either `waveform` or `input_ids`"
 
         out = {}
-        if input_ids is None:
-            input_ids = self.encoder.get_embeddings(waveform)
-            out["input_ids"] = input_ids
+        if input_ids is not None:
+            out["enc_out"] = input_ids
+        else:
+            enc_out = self.encoder(waveform)
+            if "q_idx" in enc_out:
+                out["enc_out"] = enc_out["q_idx"]
+            else:
+                out["enc_out"] = enc_out["z"]
 
         # logits_ar & logits_vp
-        o = self.ulm_projection(input_ids=input_ids, vad=vad, vad_history=vad_history)
+        o = self.ulm_projection(out["enc_out"], vad=vad, vad_history=vad_history)
         out.update(o)
         return out
 
@@ -167,7 +174,7 @@ class ULMProjection(pl.LightningModule):
             if "vad_history" in batch:
                 vad_history = batch["vad_history"]
             out = self(input_ids=batch["q"], vad=batch["vad"], vad_history=vad_history)
-            input_ids = batch["q"]
+            out["enc_out"] = batch["q"]
         else:
             # If dataset have units it has also changed the VAD so only do this here
             batch = self.fix_batch_hz(batch)
@@ -177,11 +184,13 @@ class ULMProjection(pl.LightningModule):
             out = self(
                 waveform=batch["waveform"], vad=batch["vad"], vad_history=vad_history
             )
-            input_ids = out["input_ids"]
 
-        batch_size = input_ids.shape[0]
+        batch_size = out["enc_out"].shape[0]
         loss = self.calc_losses(
-            out, input_ids=input_ids, vad_labels=batch["vad_label"], reduction=reduction
+            out,
+            input_ids=out["enc_out"],
+            vad_labels=batch["vad_label"],
+            reduction=reduction,
         )
         return loss, out, batch, batch_size
 
@@ -216,7 +225,7 @@ class ULMProjection(pl.LightningModule):
         loss, out, _, batch_size = self.shared_step(batch)
         self.log("loss", loss["total"], batch_size=batch_size)
         self.log("loss_vp", loss["vp"], batch_size=batch_size)
-        if self.conf["tier1"]["num_layers"] > 0:
+        if self.ulm_projection.tier1 is not None:
             self.log("loss_ar", loss["ar"], batch_size=batch_size)
         return loss["total"]
 
@@ -224,7 +233,7 @@ class ULMProjection(pl.LightningModule):
         loss, out, batch, batch_size = self.shared_step(batch)
         self.log("val_loss", loss["total"], batch_size=batch_size)
         self.log("val_loss_vp", loss["vp"], batch_size=batch_size)
-        if self.conf["tier1"]["num_layers"] > 0:
+        if self.ulm_projection.tier1 is not None:
             self.log("loss_ar", loss["ar"], batch_size=batch_size)
 
         m = self.projection_head.prepare_metrics(
@@ -242,7 +251,7 @@ class ULMProjection(pl.LightningModule):
         loss, out, _, batch_size = self.shared_step(batch)
         self.log("test_loss", loss["total"], batch_size=batch_size)
         self.log("test_loss_vp", loss["vp"], batch_size=batch_size)
-        if self.conf["tier1"]["num_layers"] > 0:
+        if self.ulm_projection.tier1 is not None:
             self.log("loss_ar", loss["ar"], batch_size=batch_size)
 
         m = self.projection_head.prepare_metrics(

@@ -1,17 +1,17 @@
-program: conv_ssl/train.py
+program: conv_ssl/train_on_units.py
 project: ULMProjection
-description: Train directly on encoder output (no AR)
+description: tier1 layers
 method: grid
 metric:
   name: val_loss
   goal: minimize
 parameters:
-  tier2.num_layers:
-    values: [1, 2, 4]
-  tier2.num_heads:
-    values: [1, 4]
-  tier2.dim:
+  tier1.dim:
     values: [64, 256, 768]
+  tier1.num_layers:
+    values: [1, 4]
+  tier2.num_layers:
+    values: [1, 2]
 command:
   - ${env}
   - ${interpreter}
@@ -26,13 +26,13 @@ command:
   - "--batch_size"
   - "10"
   - "--limit_train_batches"
-  - "2000"
+  - "1000"
   - "--limit_val_batches"
-  - "500"
-  - "--quantizer.n_codes"
-  - "0"
-  - "--tier1.num_layers"
-  - "0"
+  - "200"
+  - "--tier2.num_heads"
+  - "4"
   - "--conf" 
   - "conv_ssl/config/ulm_wavlm.yaml"
+  - "--data_root" 
+  - "dataset_units/wavlm_base+"
   - ${args}

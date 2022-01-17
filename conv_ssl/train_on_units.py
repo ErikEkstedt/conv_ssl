@@ -7,8 +7,6 @@ from conv_ssl.train import AnimationCallback, add_standard_callbacks
 from conv_ssl.ulm_projection import ULMProjection
 from conv_ssl.utils import count_parameters
 
-import wandb
-
 
 def add_animator_callback(k, args, callbacks):
     """Small (validation subset) dataset used for animations"""

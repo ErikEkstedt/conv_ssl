@@ -29,27 +29,37 @@ class ProjectionModel(nn.Module):
         # loss scaling AR vs VP
         self.alpha = conf["optimizer"]["alpha"]
 
+        if conf["quantizer"]["n_codes"] == 0:
+            assert conf["tier2"]["num_layers"] > 0, "Tier2 MUST be used if `n_codes`==0"
+            assert (
+                conf["tier1"]["num_layers"] == 0
+            ), "Tier1 must NOT be used if `n_codes`==0, AR is not possible."
+
         # Tier 1 Unit AutoRegressive Language Model
-        self.tier1_codebook = nn.Embedding(
-            num_embeddings=conf["quantizer"]["n_codes"],
-            embedding_dim=conf["tier1"]["dim"],
-        )
+        input_dim = conf["encoder"]["dim"]
+        self.tier1_codebook = None
+        if conf["quantizer"]["n_codes"] > 0:
+            self.tier1_codebook = nn.Embedding(
+                num_embeddings=conf["quantizer"]["n_codes"],
+                embedding_dim=conf["tier1"]["dim"],
+            )
+            input_dim = conf["tier1"]["dim"]
 
         # Vad Condition
         # vad: 2 one-hot encodings
         # so this layer is essentially an embedding with 2 indicies
-        self.vad_condition = nn.Linear(2, conf["tier1"]["dim"])
+        self.vad_condition = nn.Linear(2, input_dim)
         d_history = 5 * 2  # 5 history bins, 2 speakers: (B T 5 2)
         self.vad_history = nn.Sequential(
             Rearrange("B T b c -> B T (b c)"),
-            nn.Linear(d_history, conf["tier1"]["dim"]),
+            nn.Linear(d_history, input_dim),
         )
-        self.cond_norm = nn.LayerNorm(conf["tier1"]["dim"])
+        self.cond_norm = nn.LayerNorm(input_dim)
 
         self.tier1 = None
-        if conf["tier1"]["num_layers"] > 0:
+        if conf["quantizer"]["n_codes"] > 0 and conf["tier1"]["num_layers"] > 0:
             self.tier1 = AR(
-                input_dim=conf["quantizer"]["dim"],
+                input_dim=input_dim,
                 dim=conf["tier1"]["dim"],
                 num_layers=conf["tier1"]["num_layers"],
                 dropout=conf["tier1"]["dropout"],
@@ -68,7 +78,7 @@ class ProjectionModel(nn.Module):
         self.tier2 = None
         if conf["tier2"]["num_layers"] > 0:
             self.tier2 = AR(
-                input_dim=conf["tier1"]["dim"],
+                input_dim=input_dim,
                 dim=conf["tier2"]["dim"],
                 num_layers=conf["tier2"]["num_layers"],
                 dropout=conf["tier2"]["dropout"],
@@ -133,7 +143,7 @@ class ProjectionModel(nn.Module):
         )
 
         # Calculate AR (ULM) Loss
-        if self.conf["tier1"]["num_layers"] > 0 and input_ids is not None:
+        if self.tier1 is not None and input_ids is not None:
             loss["ar"] = self.calc_loss_ar(
                 out["logits_ar"], input_ids, reduction=reduction
             )
@@ -153,26 +163,28 @@ class ProjectionModel(nn.Module):
             v_cond += self.vad_history(vad_history)
         return self.cond_norm(z + v_cond)
 
-    def forward(self, input_ids, vad, vad_history=None):
+    def forward(self, x, vad, vad_history=None):
         out = {}
-        z = self.tier1_codebook(input_ids)
+
+        if self.tier1_codebook is not None:
+            x = self.tier1_codebook(x)
 
         if self.tier1 is not None and self.tier2 is not None:
             # Both Tiers
             # Tier 1
-            z = self.tier1(z)["z"]
+            z = self.tier1(x)["z"]
             out["logits_ar"] = self.ar_head(z)
             # Tier 2
             z = self.condition_on_vad(z, vad, vad_history)
             z = self.tier2(z)["z"]
             out["z"] = z
         elif self.tier1 is not None:
-            z = self.condition_on_vad(z, vad, vad_history)
+            z = self.condition_on_vad(x, vad, vad_history)
             z = self.tier1(z)["z"]
             out["z"] = z
             out["logits_ar"] = self.ar_head(z)
         else:
-            z = self.condition_on_vad(z, vad, vad_history)
+            z = self.condition_on_vad(x, vad, vad_history)
             z = self.tier2(z)["z"]
             out["z"] = z
 

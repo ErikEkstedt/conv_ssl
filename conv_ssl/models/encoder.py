@@ -33,11 +33,13 @@ class EncoderPretrained(nn.Module):
         self.encoder_layer = conf["encoder"]["output_layer"]
 
         # Vector quantization
-        self.quantizer = KMeanEmbedding(
-            k=conf["quantizer"]["n_codes"],
-            dim=conf["quantizer"]["dim"],
-            vectors=None if load else conf["quantizer"]["vector_path"],
-        )
+        self.quantizer = None
+        if conf["quantizer"]["n_codes"] > 0:
+            self.quantizer = KMeanEmbedding(
+                k=conf["quantizer"]["n_codes"],
+                dim=conf["encoder"]["dim"],
+                vectors=None if load else conf["quantizer"]["vector_path"],
+            )
 
         if freeze:
             self.freeze()
@@ -86,8 +88,9 @@ class EncoderPretrained(nn.Module):
         for p in self.encoder.parameters():
             p.requires_grad_(False)
 
-        for p in self.quantizer.parameters():
-            p.requires_grad_(False)
+        if self.quantizer is not None:
+            for p in self.quantizer.parameters():
+                p.requires_grad_(False)
         print(f"Froze {self.__class__.__name__}!")
 
     def hz_100_to_50(self, x):
@@ -116,5 +119,7 @@ class EncoderPretrained(nn.Module):
 
     def forward(self, waveform):
         z = self.encode(waveform)
-        q, q_idx = self.quantizer(z)
-        return {"q": q, "q_idx": q_idx, "z": z}
+        ret = {"z": z}
+        if self.quantizer is not None:
+            ret["q"], ret["q_idx"] = self.quantizer(z)
+        return ret
