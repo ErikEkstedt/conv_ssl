@@ -61,11 +61,6 @@ def train_on_units():
     conf = ULMProjection.load_config(path=args.conf, args=args)
     model = ULMProjection(conf)
     name = model.run_name  # Name the run e.g. hubert_44_41
-    print("-" * 60)
-    print(f"Model Name: {name}")
-    print("Base: ", args.conf)
-    print("PARAMETERS: ", count_parameters(model))
-    print()
 
     # Callbacks & Logger
     logger = None
@@ -80,6 +75,14 @@ def train_on_units():
                 callbacks = add_animator_callback(
                     k=conf["quantizer"]["n_codes"], args=args, callbacks=callbacks
                 )
+
+    # print after callbacks/wandb init
+    print("-" * 60)
+    print(model.summary())
+    print(f"Model Name: {name}")
+    print("Base: ", args.conf)
+    print("PARAMETERS: ", count_parameters(model))
+    print()
 
     # Trainer
     # args.auto_lr_find = True

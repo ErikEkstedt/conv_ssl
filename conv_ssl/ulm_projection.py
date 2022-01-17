@@ -60,6 +60,25 @@ class ULMProjection(pl.LightningModule):
             name += "_reg"
         return name
 
+    def summary(self):
+        s = "ULMProjection\n"
+        s += "Encoder\n"
+        s += f"\ttype: {self.conf['encoder']['type']}\n"
+        s += f"\toutput_layer: {self.conf['encoder']['output_layer']}\n"
+        s += f"\tHz: {self.conf['encoder']['frame_hz']}\n"
+        s += f"\tquantizer: {self.conf['quantizer']['n_codes']}\n"
+        s += "Tier1\n"
+        s += f"\tnum_layers: {self.conf['tier1']['num_layers']}\n"
+        s += f"\tnum_heads: {self.conf['tier1']['num_heads']}\n"
+        s += f"\tdim: {self.conf['tier1']['dim']}\n"
+        s += "Tier2\n"
+        s += f"\tnum_layers: {self.conf['tier2']['num_layers']}\n"
+        s += f"\tnum_heads: {self.conf['tier2']['num_heads']}\n"
+        s += f"\tdim: {self.conf['tier2']['dim']}\n"
+        s += "Head\n"
+        s += f"\tregression: {self.conf['vad_class_prediction']['regression']}\n"
+        return s
+
     @staticmethod
     def default_config_path():
         return DEFAULT_CONFIG
@@ -340,7 +359,7 @@ if __name__ == "__main__":
     model = ULMProjection(conf)
     name = model.run_name  # Name the run e.g. hubert_44_41
     print("-" * 60)
-    print(f"Model Name: {name}")
+    print(model.summary())
     print("Base: ", args.conf)
     print("PARAMETERS: ", count_parameters(model))
     print()

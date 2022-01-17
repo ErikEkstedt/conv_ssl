@@ -188,11 +188,6 @@ def train():
     conf = ULMProjection.load_config(path=args.conf, args=args)
     model = ULMProjection(conf)
     name = model.run_name  # Name the run e.g. hubert_44_41
-    print("-" * 60)
-    print(f"Model Name: {name}")
-    print("Base: ", args.conf)
-    print("PARAMETERS: ", count_parameters(model))
-    print()
 
     # Callbacks & Logger
     logger = None
@@ -204,6 +199,14 @@ def train():
 
         if args.animation:
             callbacks = add_animator_callback(args, callbacks)
+
+    # print after callbacks/wandb init
+    print("-" * 60)
+    print(model.summary())
+    print(f"Model Name: {name}")
+    print("Base: ", args.conf)
+    print("PARAMETERS: ", count_parameters(model))
+    print()
 
     # Trainer
     # args.auto_lr_find = True

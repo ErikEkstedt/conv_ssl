@@ -1,12 +1,10 @@
 encoder:
-  use: 0
   pretrained: true
-  output_layer: 1
+  output_layer: 6
   type: wavlm_base+
-  frame_hz: 100 # Hz
+  frame_hz: 50 # Hz
 
 quantizer:
-  use: 0
   type: kmeans # VQ
   vector_path: dataset_units/wavlm_base+/k_vectors.pt
   n_codes: 100
