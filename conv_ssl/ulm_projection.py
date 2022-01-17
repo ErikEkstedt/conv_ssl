@@ -185,6 +185,12 @@ class ULMProjection(pl.LightningModule):
                 waveform=batch["waveform"], vad=batch["vad"], vad_history=vad_history
             )
 
+        # update batch to match size
+        # some encoders (wav2vec, vq_wav2vec) drops 2 frames on 10sec audio
+        # some encoders (wavlm_base, hubert) drops 1 frames (after downsampling) on 10sec audio
+        batch["vad"] = batch["vad"][:, : out["logits_vp"].shape[1]]
+        batch["vad_label"] = batch["vad_label"][:, : out["logits_vp"].shape[1]]
+
         batch_size = out["enc_out"].shape[0]
         loss = self.calc_losses(
             out,
@@ -278,7 +284,6 @@ class ULMProjection(pl.LightningModule):
 
 
 def ani_debug():
-
     from argparse import ArgumentParser
     from datasets_turntaking.dm_dialog_audio import (
         DialogAudioDM,
@@ -403,3 +408,30 @@ if __name__ == "__main__":
     #
     # for k, v in m.items():
     #     print(f"{k}: {v}")
+
+    from conv_ssl.utils import repo_root
+    from os.path import join
+
+    name = "wav2vec"
+    conf_path = join(repo_root(), "conv_ssl/config")
+    if name == "hubert_base":
+        conf_path = join(conf_path, "ulm_hubert.yaml")
+    elif name == "wav2vec":
+        conf_path = join(conf_path, "ulm_wav2vec.yaml")
+    elif name == "vq_wav2vec":
+        conf_path = join(conf_path, "ulm_vq_wav2vec.yaml")
+    elif name == "wav2vec2_base":
+        conf_path = join(conf_path, "ulm_wav2vec2.yaml")
+    elif name == "wavlm_base+":
+        conf_path = join(conf_path, "ulm_wavlm.yaml")
+    else:
+        conf_path = join(conf_path, "ulm_cpc.yaml")
+
+    conf = ULMProjection.load_config(conf_path)
+    conf["tier1"]["num_layers"] = 0
+    conf["tier2"]["num_layers"] = 1
+    model = ULMProjection(conf)
+
+    batch = next(iter(dm.val_dataloader()))
+
+    _ = model.shared_step(batch)

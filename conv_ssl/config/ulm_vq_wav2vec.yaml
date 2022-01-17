@@ -1,21 +1,19 @@
 encoder:
-  use: 0
   pretrained: true
-  output_layer: 1
-  type: cpc
-  dim: 256
-  frame_hz: 100 # Hz
+  output_layer: 6
+  type: vq_wav2vec
+  dim: 512
+  frame_hz: 50 # Hz
 
 quantizer:
-  use: 0
   type: kmeans # VQ
-  vector_path: dataset_units/cpc/k_vectors.pt
-  n_codes: 100
+  vector_path: null
+  n_codes: 0
 
 tier1:
   type: 'transformer'
-  dim: 256
-  num_layers: 1
+  dim: 512
+  num_layers: 0
   num_heads: 4
   use_pos_emb: 1
   abspos: true
@@ -26,7 +24,7 @@ tier1:
 tier2:
   use: 1
   type: 'transformer'
-  dim: 256
+  dim: 512
   num_layers: 1
   num_heads: 4
   use_pos_emb: 0

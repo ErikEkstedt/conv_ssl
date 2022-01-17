@@ -1,6 +1,8 @@
 import pytest
+from os.path import join
 from datasets_turntaking.dm_dialog_audio import DialogAudioDM
 from conv_ssl.ulm_projection import ULMProjection
+from conv_ssl.utils import repo_root
 
 
 @pytest.fixture
@@ -40,6 +42,34 @@ def test_ulm_projection(batch, quantizer_n_codes, tier1_num_layer, tier2_num_lay
     conf["quantizer"]["n_codes"] = quantizer_n_codes
     conf["tier1"]["num_layers"] = tier1_num_layer
     conf["tier2"]["num_layers"] = tier2_num_layer
+    model = ULMProjection(conf)
+    _ = model.shared_step(batch)
+
+
+@pytest.mark.models
+@pytest.mark.ulm_projection
+@pytest.mark.encoder
+@pytest.mark.parametrize(
+    "name", ["wav2vec", "vq_wav2vec", "wavlm_base+", "hubert_base"]
+)
+def test_ulm_projection_encoders(batch, name):
+    conf_path = join(repo_root(), "conv_ssl/config")
+    if name == "hubert_base":
+        conf_path = join(conf_path, "ulm_hubert.yaml")
+    elif name == "wav2vec":
+        conf_path = join(conf_path, "ulm_wav2vec.yaml")
+    elif name == "vq_wav2vec":
+        conf_path = join(conf_path, "ulm_vq_wav2vec.yaml")
+    elif name == "wav2vec2_base":
+        conf_path = join(conf_path, "ulm_wav2vec2.yaml")
+    elif name == "wavlm_base+":
+        conf_path = join(conf_path, "ulm_wavlm.yaml")
+    else:
+        conf_path = join(conf_path, "ulm_cpc.yaml")
+
+    conf = ULMProjection.load_config(conf_path)
+    conf["tier1"]["num_layers"] = 0
+    conf["tier2"]["num_layers"] = 1
     model = ULMProjection(conf)
     _ = model.shared_step(batch)
 

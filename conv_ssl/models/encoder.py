@@ -2,17 +2,20 @@ from os.path import join
 
 import torch
 import torch.nn as nn
+import einops
 
 from conv_ssl.models.pretrained_encoders import load_pretrained_encoder
 from conv_ssl.models.kmean import KMeanEmbedding
 from conv_ssl.utils import load_config, repo_root
 
-DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/encoder.yaml")
+DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/ulm.yaml")
 MODEL_HZ = {
     "hubert_base": 50,
     "wav2vec2": 50,
     "wavlm_base": 50,
     "wavlm_base+": 50,
+    "wav2vec": 100,
+    "vq_wav2vec": 100,
     "cpc": 100,
 }
 
@@ -25,7 +28,8 @@ class EncoderPretrained(nn.Module):
 
     def __init__(self, conf, load=False, freeze=True):
         super().__init__()
-        self.conf = conf
+        self.conf = {"encoder": conf["encoder"]}
+        self.conf["quantizer"] = conf["quantizer"]
         self.frame_hz = conf["encoder"]["frame_hz"]
 
         # Encoder: Hubert (torchaudio) `output_layer` defines which representations to use
@@ -100,21 +104,47 @@ class EncoderPretrained(nn.Module):
     def get_embeddings(self, waveform):
         return self(waveform)["q_idx"]
 
+    def _hubert_wav2vec2(self, waveform):
+        return self.encoder.extract_features(waveform)[0][self.encoder_layer]
+
+    def _wavlm(self, waveform):
+        return self.encoder.extract_features(waveform, output_layer=self.encoder_layer)[
+            0
+        ]
+
+    def _wav2vec(self, waveform):
+        z = self.encoder.feature_extractor(waveform)
+        if self.conf["encoder"]["type"] == "vq-wav2vec":
+            if self.encoder_layer > 0:
+                z = self.encoder.feature_aggregator(z)
+                z = einops.rearrange(z, "... c t -> ... t c")
+            else:
+                _, z = self.encoder.vector_quantizer.forward_idx(z)
+        else:
+            if self.encoder_layer > 0:
+                z = self.encoder.feature_aggregator(z)
+            z = einops.rearrange(z, "... c t -> ... t c")
+        return z
+
+    def _cpc(self, waveform):
+        if waveform.ndim == 2:
+            waveform = waveform.unsqueeze(1)
+        z_c, z_enc, _ = self.encoder(waveform, label=None)  # c, z, label
+        if self.encoder_layer == 0:
+            z = z_enc
+        else:
+            z = z_c
+        return z
+
     def encode(self, waveform):
         if self.conf["encoder"]["type"] in ["hubert_base", "wav2vec2_base"]:
-            z = self.encoder.extract_features(waveform)[0][self.encoder_layer]
+            z = self._hubert_wav2vec2(waveform)
         elif self.conf["encoder"]["type"] in ["wavlm_base", "wavlm_base+"]:
-            z = self.encoder.extract_features(
-                waveform, output_layer=self.encoder_layer
-            )[0]
-        else:
-            if waveform.ndim == 2:
-                waveform = waveform.unsqueeze(1)
-            z_c, z_enc, _ = self.encoder(waveform, label=None)  # c, z, label
-            if self.encoder_layer == 0:
-                z = z_enc
-            else:
-                z = z_c
+            z = self._wavlm(waveform)
+        elif self.conf["encoder"]["type"] in ["vq_wav2vec", "wav2vec"]:
+            z = self._wav2vec(waveform)
+        elif self.conf["encoder"]["type"] == "cpc":
+            z = self._cpc(waveform)
         return z
 
     def forward(self, waveform):
@@ -123,3 +153,29 @@ class EncoderPretrained(nn.Module):
         if self.quantizer is not None:
             ret["q"], ret["q_idx"] = self.quantizer(z)
         return ret
+
+
+if __name__ == "__main__":
+
+    name = "wavlm_base+"
+    conf_path = join(repo_root(), "conv_ssl/config")
+    if name == "hubert_base":
+        conf_path = join(conf_path, "ulm_hubert.yaml")
+    elif name == "wav2vec":
+        conf_path = join(conf_path, "ulm_wav2vec.yaml")
+    elif name == "vq_wav2vec":
+        conf_path = join(conf_path, "ulm_vq_wav2vec.yaml")
+    elif name == "wav2vec2_base":
+        conf_path = join(conf_path, "ulm_wav2vec2.yaml")
+    elif name == "wavlm_base+":
+        conf_path = join(conf_path, "ulm_wavlm.yaml")
+    elif name == "cpc+":
+        conf_path = join(conf_path, "ulm_wavlm.yaml")
+    else:
+        assert False, f"{name} is not found"
+
+    conf = EncoderPretrained.load_config(conf_path)
+    conf["quantizer"]["vector_path"] = None
+    model = EncoderPretrained(conf)
+
+    wav_input_16khz = torch.randn(1, 16000)

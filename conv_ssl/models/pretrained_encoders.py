@@ -1,8 +1,11 @@
 from os.path import join, exists, dirname
 from os import makedirs
+
+# from numpy import printoptions
 import torch
 from torchaudio.pipelines import HUBERT_BASE, WAV2VEC2_BASE
 from torchaudio.models import hubert_base, wav2vec2_base
+
 
 from conv_ssl.utils import repo_root
 from conv_ssl.models.WavLM import WavLM, WavLMConfig
@@ -12,7 +15,6 @@ from conv_ssl.models.WavLM import WavLM, WavLMConfig
 pipeline downloads to `~/.cache/torch/hub/checkpoints/`
 """
 
-NAMES = ["hubert_base", "wav2vec2_base", "cpc"]
 
 CHECKPOINTS = {
     "hubert_base": join(
@@ -21,10 +23,13 @@ CHECKPOINTS = {
     "wav2vec2_base": join(
         repo_root(), "assets/checkpoints/wav2vec2/wav2vec2_fairseq_base_ls960.pth"
     ),
+    "wav2vec": join(repo_root(), "assets/checkpoints/wav2vec/wav2vec_large.pt"),
+    "vq_wav2vec": join(repo_root(), "assets/checkpoints/wav2vec/vq-wav2vec.pt"),
     "wavlm_base": join(repo_root(), "assets/checkpoints/wavlm/WavLM-Base.pt"),
     "wavlm_base+": join(repo_root(), "assets/checkpoints/wavlm/WavLM-Base+.pt"),
     "cpc": join(repo_root(), "assets/checkpoints/cpc/60k_epoch4-d0f474de.pt"),
 }
+NAMES = list(CHECKPOINTS.keys())
 
 
 # TODO: make Hubert/Wav2Vec2 be able to use causal attention
@@ -99,6 +104,7 @@ def load_wavlm(name="wavlm_base+"):
     """
     Original Repo: https://github.com/microsoft/unilm/tree/master/wavlm
     """
+
     # load the pre-trained checkpoints
     # load the pre-trained checkpoints
     checkpoint = torch.load(CHECKPOINTS[name])
@@ -110,12 +116,38 @@ def load_wavlm(name="wavlm_base+"):
     return model
 
 
+def load_wav2vec(name="wav2vec"):
+    from fairseq.checkpoint_utils import load_model_ensemble_and_task
+
+    cp_path = CHECKPOINTS[name]
+    model, _, _ = load_model_ensemble_and_task([cp_path])
+    model = model[0]
+    model.eval()
+    model.name = name
+    return model
+
+
+def load_vq_wav2vec(name="vq_wav2vec"):
+    cp = CHECKPOINTS[name]
+    from fairseq.checkpoint_utils import load_model_ensemble_and_task
+
+    model, _, _ = load_model_ensemble_and_task([cp])
+    model = model[0]
+    model.eval()
+    model.name = name
+    return model
+
+
 def load_pretrained_encoder(name="hubert_base"):
     assert name.lower() in CHECKPOINTS.keys()
     if name == "hubert_base":
         return load_hubert_base_custom()
     elif name == "wav2vec2_base":
         return load_wav2vec2_base_custom()
+    elif name == "wav2vec":
+        return load_wav2vec(name)
+    elif name == "vq_wav2vec":
+        return load_wav2vec(name)
     elif name.startswith("wavlm"):
         return load_wavlm(name)
     elif name.lower() == "cpc":
@@ -140,7 +172,6 @@ def test_cpc():
 
 
 def test_wavlm():
-
     model = load_wavlm("wavlm_base+")
 
     # extract the representation of last layer

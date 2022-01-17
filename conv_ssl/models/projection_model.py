@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict
+import math
 
 import einops
 from einops.layers.torch import Rearrange
@@ -138,12 +139,18 @@ class ProjectionModel(nn.Module):
         loss = {}
 
         # Calculate Projection Loss
+        # match sizes (some encoders drop single frame etc)
+        if vad_labels.shape[1] - out["logits_vp"].shape[1] < 3:
+            vad_labels = vad_labels[:, : out["logits_vp"].shape[1]]
+
         loss["vp"] = self.projection_head.loss_function(
             logits=out["logits_vp"], labels=vad_labels, reduction=reduction
         )
 
         # Calculate AR (ULM) Loss
         if self.tier1 is not None and input_ids is not None:
+            if input_ids.shape[1] - out["logits_vp"].shape[1] < 3:
+                input_ids = input_ids[:, : out["logits_vp"].shape[1]]
             loss["ar"] = self.calc_loss_ar(
                 out["logits_ar"], input_ids, reduction=reduction
             )
@@ -161,6 +168,9 @@ class ProjectionModel(nn.Module):
         v_cond = self.vad_condition(vad)
         if vad_history is not None:
             v_cond += self.vad_history(vad_history)
+
+        # match size (some encoders drop a single frame)
+        v_cond = v_cond[:, : z.shape[1]]
         return self.cond_norm(z + v_cond)
 
     def forward(self, x, vad, vad_history=None):
