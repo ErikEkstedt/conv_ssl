@@ -22,7 +22,7 @@ command:
   - "--max_epochs"
   - "5"
   - "--batch_size"
-  - "10"
+  - "70"
   - "--limit_train_batches"
   - "2000"
   - "--limit_val_batches"
