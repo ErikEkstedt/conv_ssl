@@ -1,36 +1,70 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pytorch_lightning as pl
-
 import einops
 from einops.layers.torch import Rearrange
-from torchmetrics import F1
+import pytorch_lightning as pl
+from torchmetrics import Metric, F1
 
 from datasets_turntaking.features.vad import VAD, VadProjection
 
 
-class Utils:
-    @staticmethod
-    def get_topk_from_logits(logits, k):
+class ProjectionMetrics(Metric):
+    """based on StatScores"""
+
+    def __init__(
+        self,
+        k=5,
+        min_context_frames=50,
+        regression=False,
+        bin_sizes=[20, 40, 60, 80],
+        threshold_ratio=0.5,
+        dist_sync_on_step: bool = False,
+        **kwargs,
+    ):
+        super().__init__(dist_sync_on_step=dist_sync_on_step, **kwargs)
+        self.k = 1 if regression else k
+        self.min_context_frames = min_context_frames
+
+        self.regression = regression
+        self.bin_sizes = bin_sizes
+        self.vad_projection_codebook = VadProjection(
+            n_bins=2 * len(bin_sizes),
+            bin_sizes=bin_sizes,
+            threshold_ratio=threshold_ratio,
+        )
+
+        self.f1 = F1(num_classes=2, multiclass=True)
+        self.f1_weighted = F1(num_classes=2, average="weighted", multiclass=True)
+
+        for turn_metric in ["hold", "shift"]:
+            self.add_state(
+                f"{turn_metric}_total", default=torch.tensor(0), dist_reduce_fx="sum"
+            )
+            self.add_state(
+                f"{turn_metric}_acc",
+                default=torch.zeros(k),
+                dist_reduce_fx="sum",
+            )
+
+    def regression_to_discrete(self, logits):
+        """
+        logits -> sigmoid -> probs
+        probs -> round -> onehot
+        onehot -> discrete classes
+        """
+        return self.vad_projection_codebook.onehot_to_idx(logits.sigmoid().round())
+
+    def filter_context(self, data, device="cpu"):
+        for k, v in data.items():
+            data[k] = v[:, self.min_context_frames :].to(device)
+        return data
+
+    def get_topk_from_logits(self, logits, k):
         probs_vp = logits.softmax(dim=-1)
         return probs_vp.topk(k)
 
-    @staticmethod
-    def get_topk_acc(topk_idx, label):
-        if topk_idx.ndim > label.ndim:
-            label = label.unsqueeze(-1)
-        K = topk_idx.shape[-1]
-        correct = (topk_idx == label).float()
-        acc = []
-        for i in range(1, K + 1):
-            s = (correct[..., :i].sum(dim=-1) > 0).float().mean()
-            acc.append(s)
-        acc = torch.stack(acc)
-        return acc, label.nelement()
-
-    @staticmethod
-    def topk_acc_specific_frames(topk_ns, label_ns, where_onehot):
+    def topk_acc_specific_frames(self, topk_ns, label_ns, where_onehot):
         """
         separate hold/shift topk accuracy using the `next_speaker` labels and predictions.
 
@@ -41,7 +75,7 @@ class Utils:
         # Check if relevant segments exists
         n = where_onehot.sum()
         if n == 0:
-            return None, None
+            return 0, 0
 
         # k provided
         K = topk_ns.shape[-1]
@@ -56,14 +90,13 @@ class Utils:
         # in prediction 0 -> k
         # If the correct speaker is in the topk then we get a correct prediction
         # for that given k
-        topk_acc = []
+        topk = []
         for i in range(1, K + 1):
-            s = (correct_ns[..., :i].sum(dim=-1) > 0).float().mean()
-            topk_acc.append(s)
-        return torch.stack(topk_acc), n
+            s = (correct_ns[..., :i].sum(dim=-1) > 0).float().sum()
+            topk.append(s)
+        return torch.stack(topk), n
 
-    @staticmethod
-    def get_f1_prediction_labels(topk_ns, label_ns, hold_one_hot, shift_one_hot):
+    def get_f1_prediction_labels(self, topk_ns, label_ns, hold_one_hot, shift_one_hot):
         """
         From 'next speaker' prediction/labels we extract the hold/shift predictions based
         on `hold_one_hot`/`shift_one_hot`.
@@ -108,98 +141,96 @@ class Utils:
         turn_label = torch.cat(turn_label).long()
         return pred, turn_label
 
-    @staticmethod
-    def filter_context(data, min_context_frames, device="cpu"):
-        for k, v in data.items():
-            data[k] = v[:, min_context_frames:].to(device)
-        return data
+    def update(self, logits, vad, vad_label):
+        data = {"vad": vad, "vad_label": vad_label}
+        data["hold_one_hot"], data["shift_one_hot"] = VAD.get_hold_shift_onehot(vad)
 
-
-class ProjectionMetrics:
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.acc = {
-            "hold": [],
-            "shift": [],
-            "class": [],
-            "class_silence": [],
-        }
-        self.N = {
-            "hold": [],
-            "shift": [],
-            "class": [],
-            "class_silence": [],
-        }
-        # turn-shift/hold
-        self.f1 = F1(num_classes=2, multiclass=True)
-        self.f1_weighted = F1(num_classes=2, average="weighted", multiclass=True)
-
-    def weighted_average(self, topk, n):
-        # stack on batch dim
-        a = torch.stack(topk)
-        n = torch.tensor(n)
-        if a.ndim == 1:
-            scaled = n * a
-            weighted_average = scaled.sum() / n.sum()
+        # Regression metrics only has k=1
+        if self.regression:
+            data["topk_idx"] = self.regression_to_discrete(logits).unsqueeze(-1)
         else:
-            # unsqueeze topk dim
-            n = n.unsqueeze(-1)
-            # scale values based on frequency
-            scaled = n * a
-            # weighted topk acc
-            weighted_average = scaled.sum(dim=0) / n.sum()
-        return weighted_average
+            data["topk_probs"], data["topk_idx"] = self.get_topk_from_logits(
+                logits, k=self.k
+            )
 
-    def update(self, m):
-        """Update metrics (every batch)"""
-        # Update F1: 0 element for greedy/top guess
-        if "f1" in m:
-            self.f1(m["f1"]["prediction"][..., 0], m["f1"]["label"])
-            self.f1_weighted(m["f1"]["prediction"][..., 0], m["f1"]["label"])
+        data["topk_next_speaker"] = self.vad_projection_codebook.get_next_speaker(
+            data["topk_idx"]
+        )
+        data["label_next_speaker"] = self.vad_projection_codebook.get_next_speaker(
+            data["vad_label"]
+        )
 
-        for metric in m.keys():
-            if metric in ["f1", "loss"]:
-                continue
-            value = m[metric]["topk"]
-            if value is not None:
-                self.acc[metric].append(m[metric]["topk"])
-                self.N[metric].append(m[metric]["n"])
+        # Remove frames that does not have enough context (and move to cpu)
+        data = self.filter_context(data, device="cpu")
+
+        # TopK hold/shift acc
+        hold_topk, hold_n = self.topk_acc_specific_frames(
+            data["topk_next_speaker"],
+            data["label_next_speaker"],
+            where_onehot=data["hold_one_hot"],
+        )
+        shift_topk, shift_n = self.topk_acc_specific_frames(
+            data["topk_next_speaker"],
+            data["label_next_speaker"],
+            where_onehot=data["shift_one_hot"],
+        )
+
+        self.hold_total += hold_n
+        self.shift_total += shift_n
+        for i in range(self.k):
+            self.hold_acc[i] += hold_topk[i]
+            self.shift_acc[i] += shift_topk[i]
+
+        # Prediction/Label classes for F1 hold/shift metric
+        f1_pred, f1_label = self.get_f1_prediction_labels(
+            topk_ns=data["topk_next_speaker"],
+            label_ns=data["label_next_speaker"],
+            hold_one_hot=data["hold_one_hot"],
+            shift_one_hot=data["shift_one_hot"],
+        )
+
+        if f1_pred is not None and f1_label is not None:
+            self.f1(f1_pred[..., 0], f1_label)
+            self.f1_weighted(f1_pred[..., 0], f1_label)
 
     def compute(self):
-        """Compute the aggregate metrics (on epoch end)"""
-        ret = {}
+        for i in range(self.k):
+            self.hold_acc[i] /= self.hold_total
+            self.shift_acc[i] /= self.shift_total
 
-        # F1 are handled by torchmetrics
-        ret["f1"] = self.f1.compute()
-        ret["f1_weighted"] = self.f1_weighted.compute()
-
-        # iterate over metrics
-        for metric in self.acc.keys():
-            ret[metric] = self.weighted_average(self.acc[metric], self.N[metric])
-
-        ret["hold_n"] = int(sum(self.N["hold"]))
-        ret["shift_n"] = int(sum(self.N["shift"]))
-        total = ret["hold_n"] + ret["shift_n"]
-        ret["shift_ratio"] = ret["shift_n"] / total
-        ret["hold_ratio"] = ret["hold_n"] / total
-        return ret
-
-    def __repr__(self):
-        result = self.compute()
-        s = "ProjectionMetrics\n"
-        for metric, value in result.items():
-            s += f"\t{metric}: {value}\n"
-        return s
+        return {
+            "hold": {"acc": self.hold_acc, "n": self.hold_total},
+            "shift": {"acc": self.shift_acc, "n": self.shift_total},
+            "f1": self.f1.compute(),
+            "f1_weighted": self.f1_weighted.compute(),
+        }
 
 
 class ProjectionMetricCallback(pl.Callback):
-    def __init__(self):
+    def __init__(
+        self,
+        regression=False,
+        bin_sizes=[20, 40, 60, 80],
+        threshold_ratio=0.5,
+        dist_sync_on_step=False,
+    ):
         super().__init__()
-        self.train_metric = ProjectionMetrics()
-        self.val_metric = ProjectionMetrics()
-        self.test_metric = ProjectionMetrics()
+        self.val_metric = ProjectionMetrics(
+            k=5,
+            min_context_frames=50,
+            regression=regression,
+            bin_sizes=bin_sizes,
+            threshold_ratio=threshold_ratio,
+            dist_sync_on_step=dist_sync_on_step,
+        )
+        self.test_metric = ProjectionMetrics(
+            k=5,
+            min_context_frames=50,
+            regression=regression,
+            bin_sizes=bin_sizes,
+            threshold_ratio=threshold_ratio,
+            dist_sync_on_step=dist_sync_on_step,
+        )
 
     def _log(self, result, pl_module, split="train"):
         # log result
@@ -218,7 +249,12 @@ class ProjectionMetricCallback(pl.Callback):
     def on_validation_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
     ):
-        self.val_metric.update(outputs)
+        outputs = outputs["outputs"]
+        self.val_metric.update(
+            logits=outputs["logits_vp"],
+            vad=outputs["batch"]["vad"],
+            vad_label=outputs["batch"]["vad_label"],
+        )
 
     def on_validation_epoch_end(self, trainer, pl_module):
         result = self.val_metric.compute()
@@ -230,11 +266,16 @@ class ProjectionMetricCallback(pl.Callback):
     def on_test_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
     ):
-        self.test_metric.update(outputs)
+        outputs = outputs["outputs"]
+        self.test_metric.update(
+            logits=outputs["logits_vp"],
+            vad=outputs["batch"]["vad"],
+            vad_label=outputs["batch"]["vad_label"],
+        )
 
     def on_test_epoch_end(self, trainer, pl_module):
         result = self.test_metric.compute()
-        self._log(result, pl_module, split="test")
+        self._log(result, pl_module, split="val")
 
 
 class ActivityProjectionHead(nn.Module):
@@ -285,101 +326,6 @@ class ActivityProjectionHead(nn.Module):
                 n = logits.shape[1]
                 loss = einops.rearrange(loss, "(b n) -> b n", n=n)
         return loss
-
-    def prepare_discrete(self, logits, vad, vad_label, k=5):
-        """
-        Prepare metrics for discrete vadprojection classes.
-        """
-        # Store data before removing 'min_context_frames'. We want the full data
-        # in order to get next_speaker/hold/shift
-        data = {"vad": vad, "vad_label": vad_label}
-        data["hold_one_hot"], data["shift_one_hot"] = VAD.get_hold_shift_onehot(vad)
-        data["topk_probs"], data["topk_idx"] = Utils.get_topk_from_logits(logits, k)
-        data["topk_next_speaker"] = self.vad_projection_codebook.get_next_speaker(
-            data["topk_idx"]
-        )
-        data["label_next_speaker"] = self.vad_projection_codebook.get_next_speaker(
-            data["vad_label"]
-        )
-        return data
-
-    def regression_to_discrete(self, logits):
-        """
-        logits -> sigmoid -> probs
-        probs -> round -> onehot
-        onehot -> discrete classes
-        """
-        return self.vad_projection_codebook.onehot_to_idx(logits.sigmoid().round())
-
-    def prepare_regression(self, logits, vad, vad_label):
-        """
-        Prepare metrics for discrete vadprojection classes.
-        regression values -> probs -> onehot -> discrete classes
-        """
-        # TODO:
-        data = {"vad": vad, "vad_label": vad_label}
-        data["hold_one_hot"], data["shift_one_hot"] = VAD.get_hold_shift_onehot(vad)
-        data["topk_idx"] = self.regression_to_discrete(logits).unsqueeze(-1)
-        data["topk_next_speaker"] = self.vad_projection_codebook.get_next_speaker(
-            data["topk_idx"]
-        )
-        data["label_next_speaker"] = self.vad_projection_codebook.get_next_speaker(
-            data["vad_label"]
-        )
-        return data
-
-    def prepare_metrics(self, logits, vad, vad_label, min_context_frames=0, k=5):
-        if self.regression:
-            data = self.prepare_regression(logits, vad, vad_label)
-        else:
-            data = self.prepare_discrete(logits, vad, vad_label, k)
-
-        # Remove frames that does not have enough context (and move to cpu)
-        data = Utils.filter_context(data, min_context_frames, device="cpu")
-
-        ######################################################################
-        # find "nucleus" subset
-        # p = 0.8
-        # tp = topk_probs.cumsum(dim=-1)
-        # tp = tp[tp <= 0.6]
-        # tpk = topk_idx[: len(tp)]
-        # top_p_speaker_probs = self.get_hold_shift_probs(vad=vad, probs=tp)
-
-        ######################################################################
-        # TopK for correct exact label classification
-        class_topk, n = Utils.get_topk_acc(data["topk_idx"], data["vad_label"])
-        # TopK only on silences
-        silence_onehot = (data["vad"].sum(dim=-1) == 0).float()
-        class_sil_topk, class_sil_n = Utils.topk_acc_specific_frames(
-            data["topk_idx"], data["vad_label"], silence_onehot
-        )
-
-        # TopK hold/shift acc
-        hold_topk, hold_n = Utils.topk_acc_specific_frames(
-            data["topk_next_speaker"],
-            data["label_next_speaker"],
-            where_onehot=data["hold_one_hot"],
-        )
-        shift_topk, shift_n = Utils.topk_acc_specific_frames(
-            data["topk_next_speaker"],
-            data["label_next_speaker"],
-            where_onehot=data["shift_one_hot"],
-        )
-
-        # Prediction/Label classes for F1 hold/shift metric
-        f1_pred, f1_label = Utils.get_f1_prediction_labels(
-            topk_ns=data["topk_next_speaker"],
-            label_ns=data["label_next_speaker"],
-            hold_one_hot=data["hold_one_hot"],
-            shift_one_hot=data["shift_one_hot"],
-        )
-        return {
-            "class": {"topk": class_topk, "n": n},
-            "class_silence": {"topk": class_sil_topk, "n": class_sil_n},
-            "hold": {"topk": hold_topk, "n": hold_n},
-            "shift": {"topk": shift_topk, "n": shift_n},
-            "f1": {"prediction": f1_pred, "label": f1_label},
-        }
 
     def forward(self, x):
         return self.projection_head(x)

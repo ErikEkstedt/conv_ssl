@@ -236,7 +236,7 @@ class ULMProjection(pl.LightningModule):
         self.log("loss_vp", loss["vp"], batch_size=batch_size)
         if self.ulm_projection.tier1 is not None:
             self.log("loss_ar", loss["ar"], batch_size=batch_size)
-        return loss["total"]
+        return {"loss": loss["total"]}
 
     def validation_step(self, batch, batch_idx, **kwargs):
         loss, out, batch, batch_size = self.shared_step(batch)
@@ -245,15 +245,8 @@ class ULMProjection(pl.LightningModule):
         if self.ulm_projection.tier1 is not None:
             self.log("loss_ar", loss["ar"], batch_size=batch_size)
 
-        m = self.projection_head.prepare_metrics(
-            logits=out["logits_vp"],
-            vad=batch["vad"],
-            vad_label=batch["vad_label"],
-            min_context_frames=50,
-            k=5,
-        )
-        m["loss"] = loss
-        return m
+        out["batch"] = batch
+        return {"loss": loss, "outputs": out}
 
     def test_step(self, batch, batch_idx, **kwargs):
         batch_size = batch["waveform"].shape[0]
@@ -262,16 +255,7 @@ class ULMProjection(pl.LightningModule):
         self.log("test_loss_vp", loss["vp"], batch_size=batch_size)
         if self.ulm_projection.tier1 is not None:
             self.log("loss_ar", loss["ar"], batch_size=batch_size)
-
-        m = self.projection_head.prepare_metrics(
-            logits=out["logits_vp"],
-            vad=batch["vad"],
-            vad_label=batch["vad_label"],
-            min_context_frames=50,
-            k=5,
-        )
-        m["loss"] = loss
-        return m
+        return {"loss": loss, "outputs": out}
 
     @staticmethod
     def add_model_specific_args(parent_parser):

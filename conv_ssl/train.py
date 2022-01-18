@@ -6,17 +6,15 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
-
 from conv_ssl.models import ProjectionMetricCallback
 from conv_ssl.ulm_projection import ULMProjection
-
+from conv_ssl.utils import count_parameters
 from datasets_turntaking.dm_dialog_audio import (
     DialogAudioDM,
     DialogIPU,
     print_dm,
     get_dialog_audio_datasets,
 )
-from conv_ssl.utils import count_parameters
 
 import wandb
 
@@ -191,7 +189,12 @@ def train():
 
     # Callbacks & Logger
     logger = None
-    callbacks = [ProjectionMetricCallback()]
+    callbacks = [
+        ProjectionMetricCallback(
+            regression=conf["vad_class_prediction"]["regression"],
+            bin_sizes=conf["vad_class_prediction"]["bin_sizes"],
+        )
+    ]
 
     # this should be handled automatically with pytorch_lightning?
     if not args.fast_dev_run:
