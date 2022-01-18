@@ -58,7 +58,7 @@ ConvSSL
 * sudo may be required for default setup. That is add `sudo` before each of the commands below.
 * Build Base (torchaudio was difficult): `docker build -f docker/Dockerfile_base -t conv_ssl_base .`
 * Build: `docker build . -t conv_ssl`
-* Run: `docker run -it --gpus all -v=$(pwd)/assets:/workspace/assets -v=$HOME/projects/data:/projects/data conv_ssl`
+* Run: `docker run --rm -it --gpus all -v=$(pwd)/assets:/workspace/assets -v=$HOME/projects/data:/root/projects/data conv_ssl`
 
 ## Pretrained Encoders
 
