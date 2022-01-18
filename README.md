@@ -49,6 +49,15 @@ ConvSSL
     - cd to repo, and install dependencies: `pip install -r requirements.txt`
     - install repo: `pip install -e .`
 
+## Docker
+
+* Requires [Nvidia-Docker]() for gpu support.
+  * [Nvidia Docker Github](https://github.com/NVIDIA/nvidia-docker)
+  * [github.io docs](https://nvidia.github.io/nvidia-docker/)
+  * [Installation Guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker)
+* Build Base (torchaudio was difficult): `docker build -f Dockerfile_base -t conv_ssl_base .`
+* Build: `docker build . -t conv_ssl`
+* Run: `docker run -it --gpus all -v=$(pwd)/assets:/workspace/assets -v=$HOME/projects/data:/projects/data conv_ssl`
 
 ## Pretrained Encoders
 

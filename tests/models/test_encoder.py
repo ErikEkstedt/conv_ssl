@@ -35,6 +35,10 @@ def test_encoder(name):
 
     # extract the representation of last layer
     wav_input_16khz = torch.randn(1, 16000)
+
+    if torch.cuda.is_available():
+        wav_input_16khz = wav_input_16khz.to("cuda")
+        model.to("cuda")
     z = model.encode(wav_input_16khz)
 
     # output_shape = (1, 49, 768)
