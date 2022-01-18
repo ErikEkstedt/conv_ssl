@@ -7,7 +7,7 @@ metric:
   goal: minimize
 parameters:
   encoder.type: 
-     values: [wav2vec, vq_wav2vec, hubert, wavlm_base+]
+     values: [wav2vec, vq_wav2vec, hubert_base, wavlm_base+]
   tier2.num_layers:
     values: [1, 2]
 command:

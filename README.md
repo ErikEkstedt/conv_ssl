@@ -55,6 +55,7 @@ ConvSSL
   * [Nvidia Docker Github](https://github.com/NVIDIA/nvidia-docker)
   * [github.io docs](https://nvidia.github.io/nvidia-docker/)
   * [Installation Guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker)
+* sudo may be required for default setup. That is add `sudo` before each of the commands below.
 * Build Base (torchaudio was difficult): `docker build -f docker/Dockerfile_base -t conv_ssl_base .`
 * Build: `docker build . -t conv_ssl`
 * Run: `docker run -it --gpus all -v=$(pwd)/assets:/workspace/assets -v=$HOME/projects/data:/projects/data conv_ssl`
