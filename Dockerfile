@@ -25,3 +25,6 @@ RUN pip install -e .
 # back to workspace
 WORKDIR /workspace
 RUN pip install -U omegaconf  # fair reverts omegaconf
+
+# Prepare switchboard (so we dont have to download it all the time)
+RUN python docker/prepare_dataset.py
