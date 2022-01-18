@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import einops
 from einops.layers.torch import Rearrange
 import pytorch_lightning as pl
-from torchmetrics import Metric, F1
+from torchmetrics import Metric, F1Score
 
 from datasets_turntaking.features.vad import VAD, VadProjection
 
@@ -22,6 +22,7 @@ class ProjectionMetrics(Metric):
         dist_sync_on_step: bool = False,
         **kwargs,
     ):
+        # super().__init__(dist_sync_on_step=dist_sync_on_step, dist_sync_fn=self.dist_sync_fn, **kwargs)
         super().__init__(dist_sync_on_step=dist_sync_on_step, **kwargs)
         self.k = 1 if regression else k
         self.min_context_frames = min_context_frames
@@ -34,18 +35,25 @@ class ProjectionMetrics(Metric):
             threshold_ratio=threshold_ratio,
         )
 
-        self.f1 = F1(num_classes=2, multiclass=True)
-        self.f1_weighted = F1(num_classes=2, average="weighted", multiclass=True)
+        self.f1 = F1Score(num_classes=2, multiclass=True)
+        self.f1_weighted = F1Score(num_classes=2, average="weighted", multiclass=True)
 
         for turn_metric in ["hold", "shift"]:
             self.add_state(
                 f"{turn_metric}_total", default=torch.tensor(0), dist_reduce_fx="sum"
+                # f"{turn_metric}_total", default=torch.tensor(0), dist_reduce_fx=None
             )
             self.add_state(
                 f"{turn_metric}_acc",
                 default=torch.zeros(k),
+                # dist_reduce_fx=None,
                 dist_reduce_fx="sum",
             )
+
+    def dist_sync_fn(self, outputs, **kwargs):
+        print("outputs: ", outputs)
+        for k, v in kwargs.items():
+            print(f"kwarg: {k}: {v}")
 
     def regression_to_discrete(self, logits):
         """
@@ -57,7 +65,7 @@ class ProjectionMetrics(Metric):
 
     def filter_context(self, data, device="cpu"):
         for k, v in data.items():
-            data[k] = v[:, self.min_context_frames :].to(device)
+            data[k] = v[:, self.min_context_frames :] #.to(device)
         return data
 
     def get_topk_from_logits(self, logits, k):
@@ -138,7 +146,7 @@ class ProjectionMetrics(Metric):
             return None, None
 
         pred = torch.cat(pred)
-        turn_label = torch.cat(turn_label).long()
+        turn_label = torch.cat(turn_label).long().to(pred.device)
         return pred, turn_label
 
     def update(self, logits, vad, vad_label):
@@ -174,6 +182,10 @@ class ProjectionMetrics(Metric):
             data["label_next_speaker"],
             where_onehot=data["shift_one_hot"],
         )
+
+
+        if self.hold_total.device != hold_n.device:
+            self.to(hold_n.device)
 
         self.hold_total += hold_n
         self.shift_total += shift_n
@@ -235,13 +247,11 @@ class ProjectionMetricCallback(pl.Callback):
     def _log(self, result, pl_module, split="train"):
         # log result
         for metric, value in result.items():
-            if "_n" in metric or "_ratio" in metric:
-                continue
-            if isinstance(value, torch.Tensor) and value.nelement() > 1:
-                for k, kval in enumerate(value, start=1):
-                    pl_module.log(f"{split}/{metric}/topk_{k}", kval)
+            if metric in ['hold', 'shift']:
+                for k, k_score in enumerate(value['acc']):
+                    pl_module.log(f"{split}/{metric}/topk_{k}", k_score, rank_zero_only=True)
             else:
-                pl_module.log(f"{split}/{metric}", value)
+                pl_module.log(f"{split}/{metric}", value, rank_zero_only=True)
 
     def on_validation_epoch_start(self, *args, **kwargs):
         self.val_metric.reset()
@@ -258,7 +268,8 @@ class ProjectionMetricCallback(pl.Callback):
 
     def on_validation_epoch_end(self, trainer, pl_module):
         result = self.val_metric.compute()
-        self._log(result, pl_module, split="val")
+        if trainer.is_global_zero:
+            self._log(result, pl_module, split="val")
 
     def on_test_epoch_start(self, *args, **kwargs):
         self.test_metric.reset()

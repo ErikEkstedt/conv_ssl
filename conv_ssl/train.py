@@ -175,6 +175,7 @@ def train():
         vad_bin_sizes=data_conf["dataset"]["vad_bin_sizes"],
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
+        shuffle_training_data=True,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
