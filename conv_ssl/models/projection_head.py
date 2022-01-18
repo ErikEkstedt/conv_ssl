@@ -268,8 +268,7 @@ class ProjectionMetricCallback(pl.Callback):
 
     def on_validation_epoch_end(self, trainer, pl_module):
         result = self.val_metric.compute()
-        if trainer.is_global_zero:
-            self._log(result, pl_module, split="val")
+        self._log(result, pl_module=pl_module, split="val")
 
     def on_test_epoch_start(self, *args, **kwargs):
         self.test_metric.reset()
@@ -286,7 +285,7 @@ class ProjectionMetricCallback(pl.Callback):
 
     def on_test_epoch_end(self, trainer, pl_module):
         result = self.test_metric.compute()
-        self._log(result, pl_module, split="val")
+        self._log(result, pl_module, split="test")
 
 
 class ActivityProjectionHead(nn.Module):
