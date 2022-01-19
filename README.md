@@ -59,6 +59,11 @@ ConvSSL
 * Build Base (torchaudio was difficult): `docker build -f docker/Dockerfile_base -t conv_ssl_base .`
 * Build: `docker build . -t conv_ssl`
 * Run: `docker run --rm -it --gpus all -v=$(pwd)/assets:/workspace/assets -v=$HOME/projects/data:/root/projects/data conv_ssl`
+* Used during debug + some training:
+  * Add current directory (if changing code)
+  * Run: `docker run --rm -it --gpus all -v=$(pwd):/workspace -v=$HOME/projects/data:/root/projects/data conv_ssl`
+  * Computational constraints
+  * Run: `docker run --rm -it --gpus '"device=4,5,6,7"' -m=128g --cpus=16 --shm-size=16g -v=$(pwd):/workspace -v=$HOME/projects/data:/root/projects/data conv_ssl`
 
 ## Pretrained Encoders
 

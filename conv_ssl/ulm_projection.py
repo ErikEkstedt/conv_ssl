@@ -158,9 +158,6 @@ class ULMProjection(pl.LightningModule):
         ani.save_animation(path)
         return path
 
-    def fix_batch_hz(self, batch):
-        return self.encoder.fix_batch_hz(batch)
-
     def shared_step(self, batch, reduction="mean"):
         """
         Arguments:
@@ -180,7 +177,6 @@ class ULMProjection(pl.LightningModule):
             out["enc_out"] = batch["q"]
         else:
             # If dataset have units it has also changed the VAD so only do this here
-            batch = self.fix_batch_hz(batch)
             vad_history = None
             if "vad_history" in batch:
                 vad_history = batch["vad_history"]
@@ -268,50 +264,6 @@ class ULMProjection(pl.LightningModule):
         default_conf = ULMProjection.load_config(format=None)
         parser = OmegaConfArgs.add_argparse_args(parser, default_conf)
         return parent_parser
-
-
-def ani_debug():
-    from argparse import ArgumentParser
-    from datasets_turntaking.dm_dialog_audio import (
-        DialogAudioDM,
-        DialogIPU,
-        get_dialog_audio_datasets,
-        print_dm,
-    )
-
-    parser = ArgumentParser()
-    parser = DialogAudioDM.add_data_specific_args(parser)
-    parser = ULMProjection.add_model_specific_args(parser)
-    args = parser.parse_args()
-    data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
-    # data_conf["dataset"]["type"] = "sliding"
-    print_dm(data_conf, args)
-
-    data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
-    val_hf_dataset = get_dialog_audio_datasets(
-        datasets=data_conf["dataset"]["datasets"], split="val"
-    )
-    sample_dset = DialogIPU(
-        dataset=val_hf_dataset,
-        audio_duration=data_conf["dataset"]["audio_duration"],
-        audio_normalize=data_conf["dataset"]["audio_normalize"],
-        sample_rate=data_conf["dataset"]["sample_rate"],
-        vad_hop_time=data_conf["dataset"]["vad_hop_time"],
-        vad_bin_sizes=data_conf["dataset"]["vad_bin_sizes"],
-    )
-
-    diter = iter(sample_dset)
-
-    conf = ULMProjection.load_config(path=args.conf, args=args)
-    model = ULMProjection(conf)
-
-    batch = next(diter)
-
-    for k, v in batch.items():
-        if isinstance(v, torch.Tensor):
-            print(f"{k}: {tuple(v.shape)}")
-        else:
-            print(f"{k}: {v}")
 
 
 if __name__ == "__main__":
