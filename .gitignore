@@ -129,6 +129,7 @@ dmypy.json
 .pyre/
 
 # Custom
+assets/
 runs/
 tmp_data/
 assets_local/
