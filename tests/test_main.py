@@ -71,9 +71,9 @@ def test_ulm_projection_50hz(dm_50hz, name, output_layer):
 
     logger = None
     callbacks = [ProjectionMetricCallback()]
-
-    trainer = pl.Trainer(gpus=-1, fast_dev_run=1, logger=logger, callbacks=callbacks)
-    # auto_finder = trainer.tune(model, dm)["lr_find"]
+    trainer = pl.Trainer(
+        gpus=-1, fast_dev_run=1, strategy="ddp", logger=logger, callbacks=callbacks
+    )
     trainer.fit(model, datamodule=dm_50hz)
 
 
@@ -101,7 +101,7 @@ def test_ulm_projection_100hz(dm_100hz, name, output_layer):
 
     logger = None
     callbacks = [ProjectionMetricCallback()]
-
-    trainer = pl.Trainer(gpus=-1, fast_dev_run=1, logger=logger, callbacks=callbacks)
-    # auto_finder = trainer.tune(model, dm)["lr_find"]
+    trainer = pl.Trainer(
+        gpus=-1, fast_dev_run=1, strategy="ddp", logger=logger, callbacks=callbacks
+    )
     trainer.fit(model, datamodule=dm_100hz)
