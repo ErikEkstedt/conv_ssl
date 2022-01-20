@@ -91,10 +91,6 @@ class EncoderPretrained(nn.Module):
                 p.requires_grad_(False)
         print(f"Froze {self.__class__.__name__}!")
 
-    def hz_100_to_50(self, x):
-        """Return every other frame to go from 100Hz -> 50Hz"""
-        return x[:, 1::2]
-
     def get_embeddings(self, waveform):
         return self(waveform)["q_idx"]
 
@@ -131,6 +127,7 @@ class EncoderPretrained(nn.Module):
         return z
 
     def encode(self, waveform):
+        z = None
         if self.conf["encoder"]["type"] in ["hubert_base", "wav2vec2_base"]:
             z = self._hubert_wav2vec2(waveform)
         elif self.conf["encoder"]["type"] in ["wavlm_base", "wavlm_base+"]:

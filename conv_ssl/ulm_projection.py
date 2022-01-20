@@ -114,50 +114,6 @@ class ULMProjection(pl.LightningModule):
         out.update(o)
         return out
 
-    def calc_losses(self, out, vad_labels, input_ids, reduction="mean"):
-        return self.ulm_projection.calc_losses(
-            out, vad_labels, input_ids, reduction=reduction
-        )
-
-    def animate_sample(
-        self,
-        input_ids=None,
-        waveform=None,
-        vad=None,
-        frame_step=5,  # 50 hz
-        path="/tmp/ulm_projection_vid.mp4",
-    ):
-        assert vad.ndim == 2, "input_ids must be (N, 2)"
-
-        if input_ids is not None:
-            assert input_ids.ndim == 1, "input_ids must be (N, )"
-            out = self(
-                input_ids=input_ids.unsqueeze(0).to(self.device),
-                vad=vad.unsqueeze(0).to(self.device),  # add batch and move to device
-            )
-        else:
-            assert waveform.ndim == 1, "waveform must be (N_s, )"
-            out = self(
-                waveform=waveform.unsqueeze(0).to(self.device),
-                vad=vad.unsqueeze(0).to(self.device),  # add batch and move to device
-            )
-
-        # Greedy vad prediction
-        vad_pred = out["logits_vp"][0].argmax(dim=-1)  # omit batch
-        vad_pred_oh = self.vad_projection_codebook(vad_pred)
-        steps = vad_pred.shape[0]
-        ani = VadPredAnimator(
-            waveform=waveform,
-            vad=vad,
-            vad_label_oh=vad_pred_oh.view(
-                steps, 2, self.ulm_projection.bin_per_speaker
-            ),
-            bin_sizes=self.ulm_projection.bin_sizes,
-            frame_step=frame_step,
-        )
-        ani.save_animation(path)
-        return path
-
     def shared_step(self, batch, reduction="mean"):
         """
         Arguments:
@@ -169,32 +125,48 @@ class ULMProjection(pl.LightningModule):
             batch:      same as input arguments (fixed for differenct encoder Hz)
             batch_size: int, size of batch
         """
-        if "q" in batch:  # check if precomputed indices are available
-            vad_history = None
-            if "vad_history" in batch:
-                vad_history = batch["vad_history"]
-            out = self(input_ids=batch["q"], vad=batch["vad"], vad_history=vad_history)
-            out["enc_out"] = batch["q"]
+
+        vad_history = batch.get("vad_history", None)
+        input_ids = batch.get("q", None)
+        waveform = batch.get("waveform", None)
+        if waveform is not None:
+            print("waveform: ", tuple(waveform.shape))
         else:
-            # If dataset have units it has also changed the VAD so only do this here
-            vad_history = None
-            if "vad_history" in batch:
-                vad_history = batch["vad_history"]
-            out = self(
-                waveform=batch["waveform"], vad=batch["vad"], vad_history=vad_history
-            )
+            print("waveform: None")
+        if input_ids is not None:
+            print("input_ids: ", tuple(input_ids.shape))
+        else:
+            print("input_ids: None")
+        print("batch['vad']: ", tuple(batch["vad"].shape))
+        print("batch['vad_label']: ", tuple(batch["vad_label"].shape))
+        if vad_history is not None:
+            print("vad_history: ", tuple(vad_history.shape))
+        else:
+            print("vad_history: None")
+
+        out = self(
+            waveform=waveform,
+            input_ids=input_ids,
+            vad=batch["vad"],
+            vad_history=vad_history,
+        )
+        print("out['logits_vp']: ", tuple(out["logits_vp"].shape))
+        print("out: ", out.keys())
 
         # update batch to match size
         # some encoders (wav2vec, vq_wav2vec) drops 2 frames on 10sec audio
         # some encoders (wavlm_base, hubert) drops 1 frames (after downsampling) on 10sec audio
-        batch["vad"] = batch["vad"][:, : out["logits_vp"].shape[1]]
-        batch["vad_label"] = batch["vad_label"][:, : out["logits_vp"].shape[1]]
+        n_frames = out["logits_vp"].shape[1]
+        batch["vad"] = batch["vad"][:, :n_frames]
+        batch["vad_label"] = batch["vad_label"][:, :n_frames]
+        print("batch['vad']: ", tuple(batch["vad"].shape))
+        print("batch['vad_label']: ", tuple(batch["vad_label"].shape))
 
         batch_size = out["enc_out"].shape[0]
-        loss = self.calc_losses(
+        loss = self.ulm_projection.calc_losses(
             out,
-            input_ids=out["enc_out"],
             vad_labels=batch["vad_label"],
+            input_ids=out["enc_out"],
             reduction=reduction,
         )
         return loss, out, batch, batch_size
@@ -253,6 +225,45 @@ class ULMProjection(pl.LightningModule):
             self.log("loss_ar", loss["ar"], batch_size=batch_size)
         return {"loss": loss, "outputs": out}
 
+    def animate_sample(
+        self,
+        input_ids=None,
+        waveform=None,
+        vad=None,
+        frame_step=5,  # 50 hz
+        path="/tmp/ulm_projection_vid.mp4",
+    ):
+        assert vad.ndim == 2, "input_ids must be (N, 2)"
+
+        if input_ids is not None:
+            assert input_ids.ndim == 1, "input_ids must be (N, )"
+            out = self(
+                input_ids=input_ids.unsqueeze(0).to(self.device),
+                vad=vad.unsqueeze(0).to(self.device),  # add batch and move to device
+            )
+        else:
+            assert waveform.ndim == 1, "waveform must be (N_s, )"
+            out = self(
+                waveform=waveform.unsqueeze(0).to(self.device),
+                vad=vad.unsqueeze(0).to(self.device),  # add batch and move to device
+            )
+
+        # Greedy vad prediction
+        vad_pred = out["logits_vp"][0].argmax(dim=-1)  # omit batch
+        vad_pred_oh = self.vad_projection_codebook(vad_pred)
+        steps = vad_pred.shape[0]
+        ani = VadPredAnimator(
+            waveform=waveform,
+            vad=vad,
+            vad_label_oh=vad_pred_oh.view(
+                steps, 2, self.ulm_projection.bin_per_speaker
+            ),
+            bin_sizes=self.ulm_projection.bin_sizes,
+            frame_step=frame_step,
+        )
+        ani.save_animation(path)
+        return path
+
     @staticmethod
     def add_model_specific_args(parent_parser):
         """argparse arguments for SoSIModel (based on yaml-config)"""
@@ -268,7 +279,7 @@ class ULMProjection(pl.LightningModule):
 
 if __name__ == "__main__":
     from argparse import ArgumentParser
-    from datasets_turntaking.dm_dialog_audio import DialogAudioDM, print_dm
+    from datasets_turntaking import DialogAudioDM
     from conv_ssl.utils import count_parameters
 
     parser = ArgumentParser()
@@ -277,21 +288,36 @@ if __name__ == "__main__":
     args = parser.parse_args()
     data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
     # data_conf["dataset"]["type"] = "sliding"
-    print_dm(data_conf, args)
+    DialogAudioDM.print_dm(data_conf, args)
+
+    conf = ULMProjection.load_config(path=args.conf, args=args)
+    conf["encoder"]["type"] = "vq_wav2vec"
+    conf["encoder"]["output_layer"] = 0
+    conf["quantizer"]["n_codes"] = 0
+    conf["tier1"]["num_layers"] = 0
+    conf["tier2"]["num_layers"] = 1
+    conf["tier2"]["num_heads"] = 4
+    conf["tier2"]["dim"] = 256
+    model = ULMProjection(conf)
+    name = model.run_name  # Name the run e.g. hubert_44_41
+    print("-" * 60)
+    print(model.summary())
+    print("Base: ", args.conf)
+    print("PARAMETERS: ", count_parameters(model))
+    print()
 
     dm = DialogAudioDM(
         datasets=data_conf["dataset"]["datasets"],
         type=data_conf["dataset"]["type"],
+        sample_rate=data_conf["dataset"]["sample_rate"],
         audio_duration=data_conf["dataset"]["audio_duration"],
         audio_normalize=data_conf["dataset"]["audio_normalize"],
         audio_overlap=data_conf["dataset"]["audio_overlap"],
-        audio_include_ratio=data_conf["dataset"]["audio_include_ratio"],
         audio_context_duration=data_conf["dataset"]["audio_context_duration"],
         ipu_min_time=data_conf["dataset"]["ipu_min_time"],
         ipu_pause_time=data_conf["dataset"]["ipu_pause_time"],
-        sample_rate=data_conf["dataset"]["sample_rate"],
-        vad_hop_time=data_conf["dataset"]["vad_hop_time"],
-        vad_bin_sizes=data_conf["dataset"]["vad_bin_sizes"],
+        vad_hz=model.encoder.frame_hz,
+        vad_bin_times=data_conf["dataset"]["vad_bin_times"],
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
         batch_size=4,
@@ -301,76 +327,11 @@ if __name__ == "__main__":
     dm.setup()
     diter = iter(dm.val_dataloader())
 
-    conf = ULMProjection.load_config(path=args.conf, args=args)
-    conf["tier1"]["dim"] = 64
-    conf["tier2"]["dim"] = conf["tier1"]["dim"]
-    conf["tier1"]["num_layers"] = 1
-    conf["tier1"]["num_heads"] = 1
-    conf["tier2"]["num_layers"] = 1
-    conf["tier2"]["num_heads"] = 1
-    conf["vad_class_prediction"]["regression"] = True
-    model = ULMProjection(conf)
-    name = model.run_name  # Name the run e.g. hubert_44_41
-    print("-" * 60)
-    print(model.summary())
-    print("Base: ", args.conf)
-    print("PARAMETERS: ", count_parameters(model))
-    print()
     batch = next(diter)
-    print("waveform: ", tuple(batch["waveform"].shape))
-    print("vad: ", tuple(batch["vad"].shape))
-    print("vad_history: ", tuple(batch["vad_history"].shape))
-    print("vad_label: ", tuple(batch["vad_label"].shape))
-    print("-" * 60)
-    loss, out, batch, batch_size = model.shared_step(batch)
-    for k, v in out.items():
+    for k, v in batch.items():
         if isinstance(v, torch.Tensor):
             print(f"{k}: {tuple(v.shape)}")
         else:
             print(f"{k}: {v}")
-
-    # # regression
-    # model = ULMProjection.load_from_checkpoint(
-    #     "runs/conv_ssl/ULMProjection/ULMProjection_3ptfboyq/epoch=10-val_loss=0.82926.ckpt"
-    # )
-    # loss, out, batch, batch_size = model.shared_step(batch)
-    # # logits -> sigmoid -> probs -> round -> binary
-    # # vp = out["logits_vp"].sigmoid().round()
-    # # vp = (
-    # #     model.ulm_projection.vad_projection_codebook.onehot_to_idx(vp)
-    # #     .float()
-    # #     .unsqueeze(-1)
-    # # )
-    # m = model.vad_projection_codebook.prepare_metrics(
-    #     out, batch, min_context_frames=min_context_frames, k=1, cpu=True
-    # )
-    #
-    # for k, v in m.items():
-    #     print(f"{k}: {v}")
-
-    from conv_ssl.utils import repo_root
-    from os.path import join
-
-    name = "wav2vec"
-    conf_path = join(repo_root(), "conv_ssl/config")
-    if name == "hubert_base":
-        conf_path = join(conf_path, "ulm_hubert.yaml")
-    elif name == "wav2vec":
-        conf_path = join(conf_path, "ulm_wav2vec.yaml")
-    elif name == "vq_wav2vec":
-        conf_path = join(conf_path, "ulm_vq_wav2vec.yaml")
-    elif name == "wav2vec2_base":
-        conf_path = join(conf_path, "ulm_wav2vec2.yaml")
-    elif name == "wavlm_base+":
-        conf_path = join(conf_path, "ulm_wavlm.yaml")
-    else:
-        conf_path = join(conf_path, "ulm_cpc.yaml")
-
-    conf = ULMProjection.load_config(conf_path)
-    conf["tier1"]["num_layers"] = 0
-    conf["tier2"]["num_layers"] = 1
-    model = ULMProjection(conf)
-
-    batch = next(iter(dm.val_dataloader()))
-
-    _ = model.shared_step(batch)
+    print("-" * 50)
+    loss, out, batch, batch_size = model.shared_step(batch)
