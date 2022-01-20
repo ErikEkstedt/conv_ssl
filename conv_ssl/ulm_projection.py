@@ -129,38 +129,18 @@ class ULMProjection(pl.LightningModule):
         vad_history = batch.get("vad_history", None)
         input_ids = batch.get("q", None)
         waveform = batch.get("waveform", None)
-        if waveform is not None:
-            print("waveform: ", tuple(waveform.shape))
-        else:
-            print("waveform: None")
-        if input_ids is not None:
-            print("input_ids: ", tuple(input_ids.shape))
-        else:
-            print("input_ids: None")
-        print("batch['vad']: ", tuple(batch["vad"].shape))
-        print("batch['vad_label']: ", tuple(batch["vad_label"].shape))
-        if vad_history is not None:
-            print("vad_history: ", tuple(vad_history.shape))
-        else:
-            print("vad_history: None")
-
         out = self(
             waveform=waveform,
             input_ids=input_ids,
             vad=batch["vad"],
             vad_history=vad_history,
         )
-        print("out['logits_vp']: ", tuple(out["logits_vp"].shape))
-        print("out: ", out.keys())
-
         # update batch to match size
         # some encoders (wav2vec, vq_wav2vec) drops 2 frames on 10sec audio
         # some encoders (wavlm_base, hubert) drops 1 frames (after downsampling) on 10sec audio
         n_frames = out["logits_vp"].shape[1]
         batch["vad"] = batch["vad"][:, :n_frames]
         batch["vad_label"] = batch["vad_label"][:, :n_frames]
-        print("batch['vad']: ", tuple(batch["vad"].shape))
-        print("batch['vad_label']: ", tuple(batch["vad_label"].shape))
 
         batch_size = out["enc_out"].shape[0]
         loss = self.ulm_projection.calc_losses(
