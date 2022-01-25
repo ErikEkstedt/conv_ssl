@@ -156,14 +156,9 @@ def manual_eval(model, dloader, n_high=10, n_low=5, max_iter=-1):
         loss, out, batch, _ = model.shared_step(batch, reduction="none")
 
         # Metrics Update
-        outputs = model.projection_head.prepare_metrics(
-            logits=out["logits_vp"],
-            vad=batch["vad"],
-            vad_label=batch["vad_label"],
-            min_context_frames=50,
-            k=5,
+        metrics.update(
+            logits=out["logits_vp"], vad=batch["vad"], vad_label=batch["vad_label"]
         )
-        metrics.update(outputs)
 
         batch_loss = loss["vp"].mean(dim=-1)  # (B,)
         avg_loss["total"].append(loss["total"].mean().cpu())

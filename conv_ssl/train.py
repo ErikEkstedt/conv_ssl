@@ -47,6 +47,7 @@ def train():
     # DataModule #
     ##############
     data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
+    data_conf["dataset"]["vad_hz"] = model.encoder.frame_hz
     if local_rank == 0:
         DialogAudioDM.print_dm(data_conf, args)
 
@@ -57,7 +58,7 @@ def train():
         audio_normalize=data_conf["dataset"]["audio_normalize"],
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
-        vad_hz=model.encoder.frame_hz,
+        vad_hz=data_conf["dataset"]["vad_hz"],
         vad_bin_times=data_conf["dataset"]["vad_bin_times"],
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],

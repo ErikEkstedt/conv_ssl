@@ -11,7 +11,6 @@ class AnimationCallback(pl.Callback):
         self,
         sample_dset,
         n_ani=-1,
-        frame_step=5,
         start_epoch=1,
         cache_path="/tmp/vad_animation",
     ):
@@ -20,7 +19,6 @@ class AnimationCallback(pl.Callback):
         self.sample_dset = sample_dset
         self.start_epoch = start_epoch
         self.cache_path = cache_path
-        self.frame_step = frame_step
 
     def create_animations(self, model):
         paths = []
@@ -32,10 +30,9 @@ class AnimationCallback(pl.Callback):
 
             path = join(self.cache_path, f"ani_{i}.mp4")
             model.animate_sample(
-                input_ids=d["q"],
-                waveform=d["waveform"],
+                input_ids=d.get("q", None),
+                waveform=d.get("waveform", None),
                 vad=d["vad"],
-                frame_step=self.frame_step,
                 path=path,
             )
             paths.append(path)

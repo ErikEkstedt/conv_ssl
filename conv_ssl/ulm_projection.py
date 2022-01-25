@@ -126,14 +126,13 @@ class ULMProjection(pl.LightningModule):
             batch_size: int, size of batch
         """
 
-        vad_history = batch.get("vad_history", None)
         input_ids = batch.get("q", None)
         waveform = batch.get("waveform", None)
         out = self(
             waveform=waveform,
             input_ids=input_ids,
             vad=batch["vad"],
-            vad_history=vad_history,
+            vad_history=batch.get("vad_history", None),
         )
         # update batch to match size
         # some encoders (wav2vec, vq_wav2vec) drops 2 frames on 10sec audio
@@ -141,6 +140,8 @@ class ULMProjection(pl.LightningModule):
         n_frames = out["logits_vp"].shape[1]
         batch["vad"] = batch["vad"][:, :n_frames]
         batch["vad_label"] = batch["vad_label"][:, :n_frames]
+        if "vad_history" in batch:
+            batch["vad_history"] = batch["vad_history"][:, :n_frames]
 
         batch_size = out["enc_out"].shape[0]
         loss = self.ulm_projection.calc_losses(
@@ -191,18 +192,19 @@ class ULMProjection(pl.LightningModule):
         self.log("val_loss", loss["total"], batch_size=batch_size)
         self.log("val_loss_vp", loss["vp"], batch_size=batch_size)
         if self.ulm_projection.tier1 is not None:
-            self.log("loss_ar", loss["ar"], batch_size=batch_size)
+            self.log("val_loss_ar", loss["ar"], batch_size=batch_size)
 
         out["batch"] = batch
         return {"loss": loss, "outputs": out}
 
     def test_step(self, batch, batch_idx, **kwargs):
-        batch_size = batch["waveform"].shape[0]
-        loss, out, _, batch_size = self.shared_step(batch)
+        loss, out, batch, batch_size = self.shared_step(batch)
         self.log("test_loss", loss["total"], batch_size=batch_size)
         self.log("test_loss_vp", loss["vp"], batch_size=batch_size)
         if self.ulm_projection.tier1 is not None:
-            self.log("loss_ar", loss["ar"], batch_size=batch_size)
+            self.log("val_loss_ar", loss["ar"], batch_size=batch_size)
+
+        out["batch"] = batch
         return {"loss": loss, "outputs": out}
 
     def animate_sample(
@@ -210,36 +212,33 @@ class ULMProjection(pl.LightningModule):
         input_ids=None,
         waveform=None,
         vad=None,
-        frame_step=5,  # 50 hz
         path="/tmp/ulm_projection_vid.mp4",
     ):
-        assert vad.ndim == 2, "input_ids must be (N, 2)"
+        assert vad.ndim == 2, "vad must be (N, 2)"
+        assert vad.shape[-1] == 2, "vad must be (N, 2)"
 
         if input_ids is not None:
             assert input_ids.ndim == 1, "input_ids must be (N, )"
-            out = self(
-                input_ids=input_ids.unsqueeze(0).to(self.device),
-                vad=vad.unsqueeze(0).to(self.device),  # add batch and move to device
-            )
+            input_ids = input_ids.unsqueeze(0).to(self.device)
         else:
             assert waveform.ndim == 1, "waveform must be (N_s, )"
-            out = self(
-                waveform=waveform.unsqueeze(0).to(self.device),
-                vad=vad.unsqueeze(0).to(self.device),  # add batch and move to device
-            )
+            waveform = waveform.unsqueeze(0).to(self.device)
+
+        out = self(
+            input_ids=input_ids,
+            waveform=waveform,
+            vad=vad.unsqueeze(0),
+        )
 
         # Greedy vad prediction
         vad_pred = out["logits_vp"][0].argmax(dim=-1)  # omit batch
         vad_pred_oh = self.vad_projection_codebook(vad_pred)
-        steps = vad_pred.shape[0]
         ani = VadPredAnimator(
-            waveform=waveform,
-            vad=vad,
-            vad_label_oh=vad_pred_oh.view(
-                steps, 2, self.ulm_projection.bin_per_speaker
-            ),
+            waveform=waveform.squeeze(0).cpu(),
+            vad=vad.squeeze(0).cpu(),
+            vad_label_oh=vad_pred_oh.cpu(),
             bin_sizes=self.ulm_projection.bin_sizes,
-            frame_step=frame_step,
+            frame_step=int(self.encoder.frame_hz / 10),
         )
         ani.save_animation(path)
         return path
@@ -271,7 +270,7 @@ if __name__ == "__main__":
     DialogAudioDM.print_dm(data_conf, args)
 
     conf = ULMProjection.load_config(path=args.conf, args=args)
-    conf["encoder"]["type"] = "vq_wav2vec"
+    conf["encoder"]["type"] = "wavlm_base+"
     conf["encoder"]["output_layer"] = 0
     conf["quantizer"]["n_codes"] = 0
     conf["tier1"]["num_layers"] = 0
@@ -314,4 +313,7 @@ if __name__ == "__main__":
         else:
             print(f"{k}: {v}")
     print("-" * 50)
+
+    model.animate_sample(waveform=batch["waveform"][0], vad=batch["vad"][0])
+
     loss, out, batch, batch_size = model.shared_step(batch)

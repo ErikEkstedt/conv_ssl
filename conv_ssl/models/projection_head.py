@@ -41,12 +41,10 @@ class ProjectionMetrics(Metric):
         for turn_metric in ["hold", "shift"]:
             self.add_state(
                 f"{turn_metric}_total", default=torch.tensor(0), dist_reduce_fx="sum"
-                # f"{turn_metric}_total", default=torch.tensor(0), dist_reduce_fx=None
             )
             self.add_state(
                 f"{turn_metric}_acc",
                 default=torch.zeros(k),
-                # dist_reduce_fx=None,
                 dist_reduce_fx="sum",
             )
 
@@ -65,7 +63,7 @@ class ProjectionMetrics(Metric):
 
     def filter_context(self, data, device="cpu"):
         for k, v in data.items():
-            data[k] = v[:, self.min_context_frames :] #.to(device)
+            data[k] = v[:, self.min_context_frames :]  # .to(device)
         return data
 
     def get_topk_from_logits(self, logits, k):
@@ -83,7 +81,7 @@ class ProjectionMetrics(Metric):
         # Check if relevant segments exists
         n = where_onehot.sum()
         if n == 0:
-            return 0, 0
+            return torch.zeros((self.k,)), 0
 
         # k provided
         K = topk_ns.shape[-1]
@@ -183,7 +181,6 @@ class ProjectionMetrics(Metric):
             where_onehot=data["shift_one_hot"],
         )
 
-
         if self.hold_total.device != hold_n.device:
             self.to(hold_n.device)
 
@@ -247,9 +244,11 @@ class ProjectionMetricCallback(pl.Callback):
     def _log(self, result, pl_module, split="train"):
         # log result
         for metric, value in result.items():
-            if metric in ['hold', 'shift']:
-                for k, k_score in enumerate(value['acc']):
-                    pl_module.log(f"{split}/{metric}/topk_{k}", k_score, rank_zero_only=True)
+            if metric in ["hold", "shift"]:
+                for k, k_score in enumerate(value["acc"]):
+                    pl_module.log(
+                        f"{split}/{metric}/topk_{k}", k_score, rank_zero_only=True
+                    )
             else:
                 pl_module.log(f"{split}/{metric}", value, rank_zero_only=True)
 
