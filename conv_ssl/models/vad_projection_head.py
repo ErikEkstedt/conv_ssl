@@ -350,15 +350,13 @@ class DialogEvents:
 
         ###############################################
         fill_hold = DialogEvents.fill_pauses(vad, prev_speaker, next_speaker, ds)
+        # ds = ds.cpu()
 
         ###############################################
         valid = torch.zeros(vad.shape[:-1], device=vad.device)
         for nb in range(ds.shape[0]):
             s, d, v = find_island_idx_len(ds[nb])
-            if min_duration > 0:
-                s = s[d >= min_duration]
-                v = v[d >= min_duration]
-                d = d[d >= min_duration]
+
             if v[-1] == 1:
                 # if segment ends in mutual silence we can't
                 # lookahead what happens after
@@ -366,20 +364,30 @@ class DialogEvents:
                 s = s[:-1]
                 d = d[:-1]
                 v = v[:-1]
+
+            if len(s) < 1:
+                continue
+
             sil = torch.where(v == 1)[0]
             sil_start = s[sil]
             sil_dur = d[sil]
-            after_sil = s[sil + 1]  # this can break
+            after_sil = s[sil + 1]
             for ii, start in enumerate(after_sil):
-                if start <= min_context or sil_start[ii] <= min_context:
+                if start <= min_context:
+                    continue
+                if sil_start[ii] <= min_context:
                     continue
                 if start >= max_frames:
                     break
+
                 total_activity_window = fill_hold[nb, start : start + horizon].sum(
                     dim=0
                 )
                 # a single channel has no activity
                 if (total_activity_window == 0).sum() == 1:
+                    if sil_dur[ii] < min_duration:
+                        continue
+
                     vs = sil_start[ii]
                     vs += start_pad  # pad to get silence away from last activity
                     end = vs + sil_dur[ii]
@@ -569,6 +577,9 @@ class VadProjection(ProjectionCodebook):
         super().__init__(bin_sizes, threshold_ratio)
         self.k = k
 
+        self.valid_start_pad = 10
+        self.valid_target_frames = 10
+
         # indices for extracting turn-taking metrics
         self.on_silent_shift, self.on_silent_hold = self.init_on_silent_shift()
         self.on_active_shift, self.on_active_hold = self.init_on_activity_shift()
@@ -749,6 +760,67 @@ class VadProjection(ProjectionCodebook):
         p_a[w] = act_probs[w][..., 0] / sum
         p_b[w] = act_probs[w][..., 1] / sum
         return torch.stack((p_a, p_b), dim=-1)
+
+    def extract_acc(self, p_next, shift, hold):
+        ret = {
+            "shift": {"correct": 0.0, "n": 0.0},
+            "hold": {"correct": 0.0, "n": 0.0},
+        }
+        # shifts
+        next_speaker = 0
+        w = torch.where(shift[..., next_speaker])
+        if len(w[0]) > 0:
+            sa = (p_next[w][..., next_speaker] > shift_threshold).sum().item()
+            ret["shift"]["correct"] += sa
+            ret["shift"]["n"] += len(w[0])
+        next_speaker = 1
+        w = torch.where(shift[..., next_speaker])
+        if len(w[0]) > 0:
+            sb = (p_next[w][..., next_speaker] > shift_threshold).sum().item()
+            ret["shift"]["correct"] += sb
+            ret["shift"]["n"] += len(w[0])
+        # holds
+        next_speaker = 0
+        w = torch.where(hold[..., next_speaker])
+        if len(w[0]) > 0:
+            ha = (p_next[w][..., next_speaker] > shift_threshold).sum().item()
+            ret["hold"]["correct"] += ha
+            ret["hold"]["n"] += len(w[0])
+        next_speaker = 1
+        w = torch.where(hold[..., next_speaker])
+        if len(w[0]) > 0:
+            hb = (p_next[w][..., next_speaker] > shift_threshold).sum().item()
+            ret["hold"]["correct"] += hb
+            ret["hold"]["n"] += len(w[0])
+        return ret
+
+    def forward(self, logits, vad):
+        probs = logits.softmax(dim=-1)
+        p_next = self.get_next_speaker_probs(probs, vad)
+
+        ret = {}
+
+        # TEST PLACES
+        # Valid shift/hold
+        valid = DialogEvents.find_valid_silences(
+            vad,
+            horizon,
+            min_context=min_context,
+            min_duration=min_duration,
+            start_pad=self.valid_start_pad,
+            target_frames=self.valid_target_frames,
+        )
+        hold, shift = DialogEvents.find_hold_shifts(vad)
+        hold, shift = torch.logical_and(hold, valid.unsqueeze(-1)), torch.logical_and(
+            shift, valid.unsqueeze(-1)
+        )
+        ret["event"] = {"hold": hold, "shift": shift}
+
+        # Hold/Shift Acc
+        res_shift_hold = self.extract_acc(p_next, shift, hold)
+        ret.update(res_shift_hold)
+
+        return ret
 
 
 class VadProjectionOLD(ProjectionCodebook):
@@ -1277,6 +1349,7 @@ if __name__ == "__main__":
 
     from datasets_turntaking import DialogAudioDM
     from conv_ssl.ulm_projection import ULMProjection
+    from tqdm import tqdm
     import matplotlib.pyplot as plt
 
     import matplotlib as mpl
@@ -1310,81 +1383,143 @@ if __name__ == "__main__":
     bin_sizes = [20, 40, 60, 80]
     if model.encoder.frame_hz == 50:
         bin_sizes = [10, 20, 30, 40]
-
+    shift_threshold = 0.5
     horizon = 70  # 1s
     min_context = 100  # 1s
     min_duration = 20  # 200ms
     vad_projection_head = VadProjection(bin_sizes)
 
-    batch = next(diter)
-    with torch.no_grad():
-        batch = to_device(batch, model.device)
-        loss, out, batch, _ = model.shared_step(batch, reduction="none")
-        probs = out["logits_vp"].softmax(dim=-1)
-        vad = batch["vad"]
-        vad_history = batch["vad_history"]
-        vad_label = batch["vad_label"]
+    max = 100
+    metrics = {"shift": {"correct": 0.0, "n": 0.0}, "hold": {"correct": 0.0, "n": 0.0}}
+    for ii, batch in enumerate(tqdm(diter, total=max)):
+        # batch = next(diter)
+        with torch.no_grad():
+            batch = to_device(batch, model.device)
+            loss, out, batch, _ = model.shared_step(batch, reduction="none")
+            probs = out["logits_vp"].softmax(dim=-1)
+            vad = batch["vad"]
+            vad_history = batch["vad_history"]
+            vad_label = batch["vad_label"]
+        ret = vad_projection_head(out["logits_vp"], vad)
+        metrics["shift"]["correct"] += ret["shift"]["correct"]
+        metrics["shift"]["n"] += ret["shift"]["n"]
+        metrics["hold"]["correct"] += ret["hold"]["correct"]
+        metrics["hold"]["n"] += ret["hold"]["n"]
+        if ii == max:
+            break
+    print(
+        "shift: ",
+        metrics["shift"]["correct"] / metrics["shift"]["n"],
+        metrics["shift"]["n"],
+    )
+    print(
+        "hold: ",
+        metrics["hold"]["correct"] / metrics["hold"]["n"],
+        metrics["hold"]["n"],
+    )
+
+    # Shifts
+    tp = metrics["shift"]["correct"] / metrics["shift"]["n"]
+    tn = metrics["hold"]["correct"] / metrics["hold"]["n"]
+    fp = (metrics["shift"]["n"] - metrics["shift"]["correct"]) / metrics["shift"]["n"]
+    fn = (metrics["hold"]["n"] - metrics["hold"]["correct"]) / metrics["hold"]["n"]
+    ps = tp / (tp + fp)
+    rs = tp / (tp + fn)
+    f1s = tp / (tp + 0.5 * (fp + fn))
+    f1s = tp / (tp + 0.5 * (fp + fn))
+    # f1s2 = 2 * ps * rs / (ps+rs)
+    # holds
+    tp = metrics["hold"]["correct"] / metrics["hold"]["n"]
+    tn = metrics["shift"]["correct"] / metrics["shift"]["n"]
+    fp = (metrics["hold"]["n"] - metrics["hold"]["correct"]) / metrics["hold"]["n"]
+    fn = (metrics["shift"]["n"] - metrics["shift"]["correct"]) / metrics["shift"]["n"]
+    ph = tp / (tp + fp)
+    rh = tp / (tp + fn)
+    f1h = tp / (tp + 0.5 * (fp + fn))
+    # f1h2 = 2 * ph * rh / (ph+rh)
+    print("Shift f1: ", round(f1s, 2))
+    # print('Shift f1: ', f1s2)
+    print("Shift precision: ", round(ps, 2))
+    print("Shift recall: ", round(rs, 2))
+    print("Hold f1: ", round(f1h, 2))
+    # print('Hold f1: ', f1h2)
+    print("Hold precision: ", round(ph, 2))
+    print("Hold recall: ", round(rh, 2))
+    f1w = (f1s * metrics["shift"]["n"] + f1h * metrics["hold"]["n"]) / (
+        metrics["hold"]["n"] + metrics["shift"]["n"]
+    )
+    print("f1w: ", round(f1w, 2))
+
+    # shift_at_hold = metrics['hold']['n'] - metrics['hold']['correct']
+    # fp = shift_at_hold / metrics['hold']['n']
+    #
+    # fn = (metrics['shift']['n'] - metrics['shift']['correct']) / metrics['shift']['n']
+
     # Probs
-    p_next = vad_projection_head.get_next_speaker_probs(probs, vad).cpu()
-    # TEST PLACES
-    # Valid shift/hold
-    valid = DialogEvents.find_valid_silences(
-        vad,
-        horizon,
-        min_context=min_context,
-        min_duration=min_duration,
-        start_pad=10,
-        target_frames=10,
-    )
-    hold, shift = DialogEvents.find_hold_shifts(vad)
-    hold, shift = torch.logical_and(hold, valid.unsqueeze(-1)), torch.logical_and(
-        shift, valid.unsqueeze(-1)
-    )
-    b = 0
-    _ = plot_next_speaker_probs(
-        p_next[b].cpu(),
-        vad[b].cpu(),
-        shift=shift[b].sum(dim=-1).cpu(),
-        hold=hold[b].sum(dim=-1).cpu(),
-    )
-
-    silence = DialogEvents.mutual_silences(vad)
-
-    # extract_shift(p_next, where=silence):
-    # Metrics get shift/hold
-    prev_speaker = VAD.get_last_speaker(vad)
-    next_speaker = VAD.get_next_speaker(vad)
-    where = valid.clone()
-
-    # collect prev/next speakers as hold/shift
-    ab = torch.logical_and(prev_speaker == 0, next_speaker == 1)
-    ba = torch.logical_and(prev_speaker == 1, next_speaker == 0)
-    aa = torch.logical_and(prev_speaker == 0, next_speaker == 0)
-    bb = torch.logical_and(prev_speaker == 1, next_speaker == 1)
-    # valid locations
-    ab = torch.logical_and(ab, where)
-    ba = torch.logical_and(ba, where)
-    aa = torch.logical_and(aa, where)
-    bb = torch.logical_and(bb, where)
-
-    plt.close("all")
-
-    # Dataset can use 'valid' + hold/shift to only extract short
-    # windows at appropriate times. may balance between shift/hold
-
-    # Is RNN better at not be "slow" at turn-shifts?
-    # what effect does sequence length have on performance?
-    # How much context should be the minimum for turn-taking? 3 sec?
-
-    # metrics
-    # * one single frame
-    # * aggregate
-    # * aggregate + single chunk
-
-    ################################################################################
-    # b = 0
-    # sil_probs = vad_projection_head.get_silence_shift_probs(probs).cpu()
-    # act_probs = vad_projection_head.get_active_shift_probs(probs).cpu()
-    # fig, ax = plot_vp_head(
-    #     sil_probs[b], act_probs[b], vad[b], valid[b], hold[b], shift[b], plot=True
+    # p_next = vad_projection_head.get_next_speaker_probs(probs, vad).cpu()
+    #
+    # # TEST PLACES
+    # # Valid shift/hold
+    # valid = DialogEvents.find_valid_silences(
+    #     vad,
+    #     horizon,
+    #     min_context=min_context,
+    #     min_duration=min_duration,
+    #     start_pad=10,
+    #     target_frames=10,
     # )
+    # hold, shift = DialogEvents.find_hold_shifts(vad)
+    # hold, shift = torch.logical_and(hold, valid.unsqueeze(-1)), torch.logical_and(
+    #     shift, valid.unsqueeze(-1)
+    # )
+    #
+    # b = 0
+    # _ = plot_next_speaker_probs(
+    #     p_next[b].cpu(),
+    #     vad[b].cpu(),
+    #     shift=shift[b].sum(dim=-1).cpu(),
+    #     hold=hold[b].sum(dim=-1).cpu(),
+    # )
+    #
+    # result = extract_acc(p_next, shift, hold)
+    #
+    # silence = DialogEvents.mutual_silences(vad)
+    #
+    # # extract_shift(p_next, where=silence):
+    # # Metrics get shift/hold
+    # prev_speaker = VAD.get_last_speaker(vad)
+    # next_speaker = VAD.get_next_speaker(vad)
+    # where = valid.clone()
+    #
+    # # collect prev/next speakers as hold/shift
+    # ab = torch.logical_and(prev_speaker == 0, next_speaker == 1)
+    # ba = torch.logical_and(prev_speaker == 1, next_speaker == 0)
+    # aa = torch.logical_and(prev_speaker == 0, next_speaker == 0)
+    # bb = torch.logical_and(prev_speaker == 1, next_speaker == 1)
+    # # valid locations
+    # ab = torch.logical_and(ab, where)
+    # ba = torch.logical_and(ba, where)
+    # aa = torch.logical_and(aa, where)
+    # bb = torch.logical_and(bb, where)
+    #
+    # plt.close("all")
+    #
+    # # Dataset can use 'valid' + hold/shift to only extract short
+    # # windows at appropriate times. may balance between shift/hold
+    #
+    # # Is RNN better at not be "slow" at turn-shifts?
+    # # what effect does sequence length have on performance?
+    # # How much context should be the minimum for turn-taking? 3 sec?
+    #
+    # # metrics
+    # # * one single frame
+    # # * aggregate
+    # # * aggregate + single chunk
+    #
+    # ################################################################################
+    # # b = 0
+    # # sil_probs = vad_projection_head.get_silence_shift_probs(probs).cpu()
+    # # act_probs = vad_projection_head.get_active_shift_probs(probs).cpu()
+    # # fig, ax = plot_vp_head(
+    # #     sil_probs[b], act_probs[b], vad[b], valid[b], hold[b], shift[b], plot=True
+    # # )
