@@ -26,11 +26,11 @@ class WandbArtifactCallback(pl.Callback):
             artifact.add_file(path)
         run.log_artifact(artifact)
 
-    def on_train_end(self, trainer, **kwargs):
+    def on_train_end(self, trainer, pl_module):
         print("Training End ---------------- Custom Upload")
         self.upload(trainer)
 
-    def on_keyboard_interrupt(self, trainer, **kwargs):
+    def on_keyboard_interrupt(self, trainer, pl_module):
         print("Keyboard Interruption ------- Custom Upload")
         self.upload(trainer)
 
