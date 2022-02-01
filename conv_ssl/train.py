@@ -30,9 +30,10 @@ class WandbArtifactCallback(pl.Callback):
         print("Training End ---------------- Custom Upload")
         self.upload(trainer)
 
-    def on_keyboard_interrupt(self, trainer, pl_module):
-        print("Keyboard Interruption ------- Custom Upload")
-        self.upload(trainer)
+    def on_exception(self, trainer, pl_module, exception):
+        if isinstance(exception, KeyboardInterrupt):
+            print("Keyboard Interruption ------- Custom Upload")
+            self.upload(trainer)
 
 
 def train():
