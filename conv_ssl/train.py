@@ -1,28 +1,43 @@
+# from os.path import join, split, basename
 from argparse import ArgumentParser
 from os import makedirs, environ
-from os.path import join, split, basename
-
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 from datasets_turntaking import DialogAudioDM
-from conv_ssl.models import ProjectionMetricCallback
-from conv_ssl.ulm_projection import ULMProjection
+from conv_ssl.model import VPModel
 from conv_ssl.utils import count_parameters
 
+import wandb
 
-# import wandb
+PROJECT = "VPModel"
+SAVEDIR = "runs/VPModel"
 
 
-PROJECT = "ULMProjection"
-SAVEDIR = "runs/conv_ssl/ULMProjection"
+class WandbArtifactCallback(pl.Callback):
+    def upload(self, trainer):
+        run = trainer.logger.experiment
+        print(f"Ending run: {run.id}")
+        artifact = wandb.Artifact(f"{run.id}_model", type="model")
+        for path, val_loss in trainer.checkpoint_callback.best_k_models.items():
+            print(f"Adding artifact: {path}")
+            artifact.add_file(path)
+        run.log_artifact(artifact)
+
+    def on_train_end(self, trainer, **kwargs):
+        print("Training End ---------------- Custom Upload")
+        self.upload(trainer)
+
+    def on_keyboard_interrupt(self, trainer, **kwargs):
+        print("Keyboard Interruption ------- Custom Upload")
+        self.upload(trainer)
 
 
 def train():
     parser = ArgumentParser()
-    parser = ULMProjection.add_model_specific_args(parser)
+    parser = VPModel.add_model_specific_args(parser)
     parser = DialogAudioDM.add_data_specific_args(parser)
     parser = pl.Trainer.add_argparse_args(parser)
     parser.add_argument("--seed", type=int, default=1)
@@ -35,19 +50,31 @@ def train():
     parser.add_argument("--animation_n", default=10, type=int)
     args = parser.parse_args()
     pl.seed_everything(args.seed)
+
     local_rank = environ.get("LOCAL_RANK", 0)
 
     #########
     # Model #
     #########
-    conf = ULMProjection.load_config(path=args.conf, args=args)
-    model = ULMProjection(conf)
+    conf = VPModel.load_config(path=args.conf, args=args)
+    model = VPModel(conf)
+
+    # print after callbacks/wandb init
+    if local_rank == 0:
+        print("-" * 60)
+        print(model.summary())
+        print(f"Model Name: {model.run_name}")
+        print("Base: ", args.conf)
+        print("PARAMETERS: ", count_parameters(model))
+        print()
+        print("-" * 60)
 
     ##############
     # DataModule #
     ##############
     data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
-    data_conf["dataset"]["vad_hz"] = model.encoder.frame_hz
+    # Update the data to match MODEL Frame rate (Hz)
+    data_conf["dataset"]["vad_hz"] = model.frame_hz
     if local_rank == 0:
         DialogAudioDM.print_dm(data_conf, args)
 
@@ -69,44 +96,37 @@ def train():
 
     # Callbacks & Logger
     logger = None
-    callbacks = [
-        ProjectionMetricCallback(
-            regression=conf["vad_class_prediction"]["regression"],
-            bin_sizes=conf["vad_class_prediction"]["bin_sizes"],
-        )
-    ]
+    callbacks = []
 
     # this should be handled automatically with pytorch_lightning?
     if not args.fast_dev_run:
-        # logger, callbacks = add_standard_callbacks(name, args, model, callbacks)
-        # if args.animation:
-        #     callbacks = add_animator_callback(args, callbacks)
+
         makedirs(SAVEDIR, exist_ok=True)
         logger = WandbLogger(
             save_dir=SAVEDIR,
             project=PROJECT + args.project_info,
             name=model.run_name + args.name_info,
             log_model=not args.dont_log_model,
+            # log_model=True,  # True: logs after training finish
         )
+
         callbacks.append(
             ModelCheckpoint(
-                dirpath="checkpoints",
-                filename="{epoch}-{val_loss:.5f}",
-                save_top_k=1,
+                mode="max",
+                monitor="val_f1_weighted",
                 # mode="min",
                 # monitor="val_loss",
-                monitor="val/f1_weighted",
-                mode="max",
             )
         )
+        callbacks.append(WandbArtifactCallback())
         verbose = False
         if local_rank == 0:
             print(f"Early stopping (patience={args.patience})")
             verbose = True
+
         callbacks.append(
             EarlyStopping(
-                # monitor="val_loss_vp",
-                monitor="val/f1_weighted",
+                monitor="val_f1_weighted",
                 mode="max",
                 patience=args.patience,
                 strict=True,  # crash if "monitor" is not found in val metrics
@@ -114,23 +134,17 @@ def train():
             )
         )
 
-    # print after callbacks/wandb init
-    if local_rank == 0:
-        print("-" * 60)
-        print(model.summary())
-        print(f"Model Name: {model.run_name}")
-        print("Base: ", args.conf)
-        print("PARAMETERS: ", count_parameters(model))
-        print()
-        print("-" * 60)
-
     # Trainer
     # args.auto_lr_find = True
     trainer = pl.Trainer.from_argparse_args(
         args=args, logger=logger, callbacks=callbacks
     )
     # auto_finder = trainer.tune(model, dm)["lr_find"]
-    trainer.fit(model, datamodule=dm)
+    try:
+        trainer.fit(model, datamodule=dm)
+    except KeyboardInterrupt:
+        if logger is not None:
+            logger.finalize()
 
 
 if __name__ == "__main__":
