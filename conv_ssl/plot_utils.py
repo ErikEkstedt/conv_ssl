@@ -210,3 +210,303 @@ def plot_probs(probs, ax, label="shift %", color="r"):
     ax_ts.plot(probs, label=label, color=color, linewidth=2)
     ax_ts.legend(loc="upper left")
     ax_ts.set_ylim([0, 1])
+
+
+def plot_area(oh, ax, label=None, color="b", alpha=1):
+    ax.fill_between(
+        torch.arange(oh.shape[0]),
+        y1=-1,
+        y2=1,
+        where=oh,
+        color=color,
+        alpha=alpha,
+        label=label,
+    )
+
+
+def plot_vp_head(
+    sil_probs,
+    act_probs,
+    vad,
+    valid,
+    hold,
+    shift,
+    area_alpha=0.3,
+    min_context_frames=100,
+    horizon=100,
+    plot=True,
+):
+    sil_probs = sil_probs.cpu()
+    act_probs = act_probs.cpu()
+    vad = vad.cpu()
+    valid = valid.cpu()
+    hold = hold.cpu()
+    shift = shift.cpu()
+    valid_shift = torch.logical_and(valid.unsqueeze(-1), shift.cpu())
+    valid_hold = torch.logical_and(valid.unsqueeze(-1), hold.cpu())
+
+    N = vad.shape[0]
+    fig, ax = plt.subplots(4, 1, sharex=True, figsize=(16, 9))
+    ##############################################################################3
+    # Next speaker A
+    n_fig = 0
+    ax[n_fig].plot(sil_probs[:, 0], label="Silence A next", color="b")
+    ax[n_fig].plot(
+        act_probs[:, 0],
+        label="Active A next",
+        color="darkblue",
+        linestyle="dotted",
+    )
+    _ = plot_vad_oh(vad.cpu(), ax=ax[n_fig].twinx(), alpha=0.6)
+    n_fig += 1
+    ##############################################################################3
+    # Next speaker B
+    ax[n_fig].plot(sil_probs[:, 1], label="Silence B next", color="orange")
+    ax[n_fig].plot(
+        act_probs[:, 1],
+        label="Active B next",
+        color="darkorange",
+        linestyle="dotted",
+    )
+    _ = plot_vad_oh(vad.cpu(), ax=ax[n_fig].twinx(), alpha=0.6)
+    n_fig += 1
+    ##############################################################################3
+    # VALID
+    _ = plot_vad_oh(vad.cpu(), ax=ax[n_fig].twinx(), alpha=0.6)
+    plot_area(valid, ax=ax[n_fig], label="VALID", color="k", alpha=area_alpha)
+    ax[n_fig].vlines(
+        x=[min_context_frames, N - horizon],
+        ymin=-1,
+        ymax=1,
+        color="k",
+        linestyle="dashed",
+        linewidth=3,
+    )
+    n_fig += 1
+    ##############################################################################3
+    # VALID Hold/Shift
+    _ = plot_vad_oh(vad.cpu(), ax=ax[n_fig].twinx(), alpha=0.6)
+    plot_area(
+        valid_shift[:, 0], ax=ax[n_fig], label="Shift", color="g", alpha=area_alpha
+    )
+    plot_area(valid_shift[:, 1], ax=ax[n_fig], color="g", alpha=area_alpha)
+    plot_area(valid_hold[:, 0], ax=ax[n_fig], label="Hold", color="r", alpha=area_alpha)
+    plot_area(valid_hold[:, 1], ax=ax[n_fig], color="r", alpha=area_alpha)
+    ax[n_fig].vlines(
+        x=[min_context_frames, N - horizon],
+        ymin=-1,
+        ymax=1,
+        color="k",
+        linestyle="dashed",
+        linewidth=3,
+    )
+    n_fig += 1
+    for a in ax:
+        a.legend(loc="upper left", fontsize=12)
+    if plot:
+        plt.pause(0.1)
+    return fig, ax
+
+
+def plot_vad_label(
+    vad_label_oh,
+    frames=[10, 20, 30, 40],
+    colors=["b", "orange"],
+    yticks=["B", "A"],
+    ylabel=None,
+    label=(None, None),
+    legend_loc="best",
+    alpha=0.9,
+    ax=None,
+    figsize=(6, 4),
+    plot=False,
+):
+    fig = None
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+
+    frame_starts = torch.tensor(frames).cumsum(0)[:-1]
+    x = torch.arange(sum(frames))
+    expanded = []
+    for i, f in enumerate(frames):
+        expanded.append(vad_label_oh[:, i].repeat(f, 1))
+    expanded = torch.cat(expanded)
+
+    if expanded[:, 0].sum() > 0:
+        ax.fill_between(
+            x,
+            y1=0,
+            y2=expanded[:, 0],
+            step="pre",
+            alpha=alpha,
+            color=colors[0],
+            label=label[0],
+        )
+    if expanded[:, 1].sum() > 0:
+        ax.fill_between(
+            x,
+            y1=-expanded[:, 1],
+            y2=0,
+            step="pre",
+            alpha=alpha,
+            color=colors[1],
+            label=label[1],
+        )
+    ax.set_ylim([-1.05, 1.05])
+    ax.set_xlim([0, len(x) - 1])
+    ax.set_xticks([])
+    ax.hlines(y=0, xmin=0, xmax=len(x), color="k", linestyle="dashed", linewidth=1)
+    ax.vlines(x=frame_starts - 1, ymin=-1, ymax=1, color="k", linewidth=2)
+
+    if label[0] is not None:
+        ax.legend(loc=legend_loc)
+
+    if yticks is None:
+        ax.set_yticks([])
+    else:
+        ax.set_yticks([-0.5, 0.5])
+        ax.set_yticklabels(yticks)
+
+    if ylabel is not None:
+        ax.set_ylabel(ylabel)
+
+    if plot:
+        plt.tight_layout()
+        plt.pause(0.01)
+    return fig, ax
+
+
+def plot_labels(label_oh, n_rows, n_cols, figtitle=None, plot=True):
+    j = 0
+    fig, ax = plt.subplots(
+        n_rows, n_cols, sharex=True, figsize=(4 * n_cols, 2 * n_rows)
+    )
+    for row in range(n_rows):
+        for col in range(n_cols):
+            plot_vad_label(label_oh[j], ax=ax[row, col])
+            j += 1
+            if j >= label_oh.shape[0]:
+                break
+        if j >= label_oh.shape[0]:
+            break
+
+    if figtitle is not None:
+        fig.suptitle(figtitle, fontsize=15, fontweight="bold")
+
+    plt.tight_layout()
+    if plot:
+        plt.pause(0.1)
+    return fig, ax
+
+
+def plot_all_labels(vad_projection_head, next_speaker):
+    on_silent_shift_oh = vad_projection_head.idx_to_onehot(
+        vad_projection_head.on_silent_shift
+    )
+    on_silent_hold_oh = vad_projection_head.idx_to_onehot(
+        vad_projection_head.on_silent_hold
+    )
+    on_active_shift_oh = vad_projection_head.idx_to_onehot(
+        vad_projection_head.on_active_shift
+    )
+    on_active_hold_oh = vad_projection_head.idx_to_onehot(
+        vad_projection_head.on_active_hold
+    )
+    print("on_silent_shift_oh: ", tuple(on_silent_shift_oh.shape))
+    print("on_silent_hold_oh: ", tuple(on_silent_hold_oh.shape))
+    print("on_active_shift_oh: ", tuple(on_active_shift_oh.shape))
+    print("on_active_hold_oh: ", tuple(on_active_hold_oh.shape))
+    ssh = plot_labels(
+        on_silent_shift_oh[next_speaker], n_rows=2, n_cols=2, figtitle="SILENT SHIFT"
+    )
+    sho = plot_labels(
+        on_silent_hold_oh[next_speaker], n_rows=2, n_cols=2, figtitle="SILENT HOLD"
+    )
+    ash = plot_labels(
+        on_active_shift_oh[next_speaker], n_rows=3, n_cols=4, figtitle="ACTIVE SHIFT"
+    )
+    aho = plot_labels(
+        on_active_hold_oh[next_speaker], n_rows=2, n_cols=2, figtitle="ACTIVE HOLD"
+    )
+
+
+def plot_next_speaker_probs(
+    p_next, vad, shift_prob=None, shift=None, hold=None, plot=True
+):
+    a_prob = p_next[:, 0].cpu()
+    b_prob = p_next[:, 1].cpu()
+    v = vad.cpu()
+
+    n = 3
+    if shift_prob is not None:
+        n = 4
+        shift_prob = shift_prob.cpu()
+    fig, ax = plt.subplots(n, 1, sharex=True, figsize=(9, 6))
+    ##############################################################################3
+    # Next speaker A
+    n_fig = 0
+    twin = ax[n_fig].twinx()
+    _ = plot_vad_oh(v, ax=twin, alpha=0.6)
+
+    if shift is not None:
+        plot_area(shift, ax=twin, label="Shift", color="g", alpha=0.2)
+    if hold is not None:
+        plot_area(hold, ax=twin, label="Shift", color="r", alpha=0.2)
+    twin.legend(loc="upper right")
+    ax[n_fig].plot(a_prob, label="A next speaker", color="b", linewidth=2)
+    ax[n_fig].set_ylim([0, 1])
+
+    n_fig += 1
+    ##############################################################################3
+    # Next speaker B
+    twin = ax[n_fig].twinx()
+    _ = plot_vad_oh(v, ax=twin, alpha=0.6)
+    if shift is not None:
+        plot_area(shift, ax=twin, label="Shift", color="g", alpha=0.2)
+    if hold is not None:
+        plot_area(hold, ax=twin, label="Shift", color="r", alpha=0.2)
+    twin.legend(loc="upper right")
+    ax[n_fig].plot(b_prob, label="B next speaker", color="orange", linewidth=2)
+    ax[n_fig].set_ylim([0, 1])
+    n_fig += 1
+    if shift_prob is not None:
+        twin = ax[n_fig].twinx()
+        _ = plot_vad_oh(v, ax=twin, alpha=0.6)
+        if shift is not None:
+            plot_area(shift, ax=twin, label="Shift", color="g", alpha=0.2)
+        if hold is not None:
+            plot_area(hold, ax=twin, label="Shift", color="r", alpha=0.2)
+        twin.legend(loc="upper right")
+        ax[n_fig].plot(shift_prob, label="Shift", color="g", linewidth=2)
+        ax[n_fig].set_ylim([0, 1])
+        n_fig += 1
+    ##############################################################################3
+    # DIFF
+    diff = a_prob - b_prob
+    ax[n_fig].hlines(y=0, xmin=0, xmax=diff.shape[0], color="k", linewidth=2)
+    ax[n_fig].fill_between(
+        torch.arange(diff.shape[0]),
+        y1=0,
+        y2=diff,
+        where=diff > 0,
+        color="b",
+    )
+    ax[n_fig].fill_between(
+        torch.arange(diff.shape[0]),
+        y1=diff,
+        y2=0,
+        where=diff < 0,
+        color="orange",
+    )
+    if shift is not None:
+        plot_area(shift, ax=ax[n_fig], label="Shift", color="g", alpha=0.2)
+    if hold is not None:
+        plot_area(hold, ax=ax[n_fig], label="Shift", color="r", alpha=0.2)
+    ax[n_fig].set_ylim([-1, 1])
+
+    for a in ax:
+        a.legend(loc="upper left")
+    ax[-1].set_xlim([0, a_prob.shape[0]])
+    if plot:
+        plt.pause(0.1)
+    return fig, ax

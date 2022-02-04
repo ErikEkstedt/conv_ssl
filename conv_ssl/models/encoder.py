@@ -8,7 +8,7 @@ from conv_ssl.models.pretrained_encoders import load_pretrained_encoder
 from conv_ssl.models.kmean import KMeanEmbedding
 from conv_ssl.utils import load_config, repo_root
 
-DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/ulm.yaml")
+DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/model.yaml")
 MODEL_HZ = {
     "hubert_base": 50,
     "wav2vec2_base": 50,
@@ -30,6 +30,52 @@ MODEL_DIM = {
 }
 
 
+class Downsample(nn.Module):
+    def __init__(self, dim=512, n_frames=5, type="mean", dimension=-1) -> None:
+        super().__init__()
+        self.dim = dim
+        self.dimension = dimension
+        self.n_frames = n_frames
+        self.type = type
+        self.net = self._build()
+
+    def __repr__(self):
+        s = "Downsampler(\n"
+        s += f"\ttype: {self.type}\n"
+        s += f"\tn_frames: {self.n_frames}\n"
+        s += ")"
+        return s
+
+    def _build(self):
+        if self.type == "cnn":
+            net = nn.Conv1d(
+                in_channels=self.dim,
+                out_channels=self.dim,
+                kernel_size=self.n_frames,
+                stride=self.n_frames,
+            )
+        elif self.type == "maxpool":
+            net = nn.MaxPool1d(kernel_size=self.n_frames, stride=self.n_frames)
+        else:
+            net = None
+        return net
+
+    def forward(self, x):
+        if self.type == "mean":
+            x = x.unfold(
+                dimension=self.dimension, step=self.n_frames, size=self.n_frames
+            ).mean(dim=-1)
+        elif self.type == "last":
+            x = x.unfold(
+                dimension=self.dimension, step=self.n_frames, size=self.n_frames
+            )[..., -1]
+        else:
+            x = einops.rearrange(x, "b n c -> b c n")
+            x = self.net(x)
+            x = einops.rearrange(x, "b c n -> b n c")
+        return x
+
+
 class EncoderPretrained(nn.Module):
     """
     Encoder (pretrained, default='hubert_base')
@@ -44,6 +90,25 @@ class EncoderPretrained(nn.Module):
         # Encoder: Hubert (torchaudio) `output_layer` defines which representations to use
         self.encoder = load_pretrained_encoder(conf["encoder"]["type"])
         self.encoder_layer = conf["encoder"]["output_layer"]
+
+        # Downsampling
+        self.downsampler = None
+        if (
+            conf["encoder"]["downsample"]
+            and conf["encoder"]["target_frame_hz"] != self.frame_hz
+            and conf["encoder"]["target_frame_hz"] != 0
+        ):
+            dim = 728
+            if conf["encoder"]["type"] in ["wav2vec", "vq_wav2vec"]:
+                dim = 512
+            n_frames = self.frame_hz // conf["encoder"]["target_frame_hz"]
+            self.frame_hz = conf["encoder"]["target_frame_hz"]
+            self.downsampler = Downsample(
+                dim=dim,
+                n_frames=n_frames,
+                type=conf["encoder"]["downsample"],
+                dimension=1,
+            )
 
         # Vector quantization
         self.quantizer = None
@@ -116,16 +181,6 @@ class EncoderPretrained(nn.Module):
             z = einops.rearrange(z, "... c t -> ... t c")
         return z
 
-    def _cpc(self, waveform):
-        if waveform.ndim == 2:
-            waveform = waveform.unsqueeze(1)
-        z_c, z_enc, _ = self.encoder(waveform, label=None)  # c, z, label
-        if self.encoder_layer == 0:
-            z = z_enc
-        else:
-            z = z_c
-        return z
-
     def encode(self, waveform):
         z = None
         if self.conf["encoder"]["type"] in ["hubert_base", "wav2vec2_base"]:
@@ -136,6 +191,9 @@ class EncoderPretrained(nn.Module):
             z = self._wav2vec(waveform)
         elif self.conf["encoder"]["type"] == "cpc":
             z = self._cpc(waveform)
+
+        if self.downsampler is not None:
+            z = self.downsampler(z)
         return z
 
     def forward(self, waveform):
@@ -148,25 +206,36 @@ class EncoderPretrained(nn.Module):
 
 if __name__ == "__main__":
 
-    name = "wavlm_base+"
-    conf_path = join(repo_root(), "conv_ssl/config")
-    if name == "hubert_base":
-        conf_path = join(conf_path, "ulm_hubert.yaml")
-    elif name == "wav2vec":
-        conf_path = join(conf_path, "ulm_wav2vec.yaml")
-    elif name == "vq_wav2vec":
-        conf_path = join(conf_path, "ulm_vq_wav2vec.yaml")
-    elif name == "wav2vec2_base":
-        conf_path = join(conf_path, "ulm_wav2vec2.yaml")
-    elif name == "wavlm_base+":
-        conf_path = join(conf_path, "ulm_wavlm.yaml")
-    elif name == "cpc+":
-        conf_path = join(conf_path, "ulm_wavlm.yaml")
-    else:
-        assert False, f"{name} is not found"
+    # name = "model.yaml"
+    # conf_path = join(repo_root(), "conv_ssl/config")
+    # if name == "hubert_base":
+    #     conf_path = join(conf_path, "ulm_hubert.yaml")
+    # elif name == "wav2vec":
+    #     conf_path = join(conf_path, "ulm_wav2vec.yaml")
+    # elif name == "vq_wav2vec":
+    #     conf_path = join(conf_path, "ulm_vq_wav2vec.yaml")
+    # elif name == "wav2vec2_base":
+    #     conf_path = join(conf_path, "ulm_wav2vec2.yaml")
+    # elif name == "wavlm_base+":
+    #     conf_path = join(conf_path, "ulm_wavlm.yaml")
+    # elif name == "cpc+":
+    #     conf_path = join(conf_path, "ulm_wavlm.yaml")
+    # else:
+    #     assert False, f"{name} is not found"
 
-    conf = EncoderPretrained.load_config(conf_path)
+    conf = EncoderPretrained.load_config()
+    conf["encoder"]["type"] = "wav2vec"
+    conf["encoder"]["target_frame_hz"] = 20
+    conf["encoder"]["downsample"] = "mean"
     conf["quantizer"]["vector_path"] = None
     model = EncoderPretrained(conf)
+    n = count_parameters(model, learnable=True)
+    print("parameters: ", n)
 
-    wav_input_16khz = torch.randn(1, 16000)
+    sr = 16000
+    wav_input_16khz = torch.randn(1, sr * 10)
+
+    o = model(wav_input_16khz)
+    print("o['z']: ", tuple(o["z"].shape))
+
+    from conv_ssl.utils import count_parameters

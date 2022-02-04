@@ -76,6 +76,7 @@ def train():
     data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
     # Update the data to match MODEL Frame rate (Hz)
     data_conf["dataset"]["vad_hz"] = model.frame_hz
+    data_conf["dataset"]["vad_bin_times"] = conf["vad_projection"]["bin_times"]
     if local_rank == 0:
         DialogAudioDM.print_dm(data_conf, args)
 
@@ -141,11 +142,8 @@ def train():
         args=args, logger=logger, callbacks=callbacks
     )
     # auto_finder = trainer.tune(model, dm)["lr_find"]
-    try:
-        trainer.fit(model, datamodule=dm)
-    except KeyboardInterrupt:
-        if logger is not None:
-            logger.finalize()
+
+    trainer.fit(model, datamodule=dm)
 
 
 if __name__ == "__main__":

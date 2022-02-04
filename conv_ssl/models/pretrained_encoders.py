@@ -111,7 +111,7 @@ def load_wavlm(name="wavlm_base+"):
     cfg = WavLMConfig(checkpoint["cfg"])
     model = WavLM(cfg)
     model.load_state_dict(checkpoint["model"])
-    model.eval()
+    model = model.eval()
     model.name = name
     return model
 
@@ -122,7 +122,7 @@ def load_wav2vec(name="wav2vec"):
     cp_path = CHECKPOINTS[name]
     model, _, _ = load_model_ensemble_and_task([cp_path])
     model = model[0]
-    model.eval()
+    model = model.eval()
     model.name = name
     return model
 
@@ -133,7 +133,7 @@ def load_vq_wav2vec(name="vq_wav2vec"):
 
     model, _, _ = load_model_ensemble_and_task([cp])
     model = model[0]
-    model.eval()
+    model = model.eval()
     model.name = name
     return model
 

@@ -41,7 +41,7 @@ vad_cond:
 
 vad_projection:
   bin_times: [.2, .4, .6, .8]
-  regression: false
+  regression: true
   regression_loss: bce # mse, mae, l1 (same as mae)
   vad_threshold: 0.5
   pred_threshold: 0.5
