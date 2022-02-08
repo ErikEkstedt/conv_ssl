@@ -9,12 +9,8 @@ import pytorch_lightning as pl
 from conv_ssl.models import EncoderPretrained, AR
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
-from datasets_turntaking.features.vad import VadProjection
-from conv_ssl.vad_projection.vad_projection import (
-    VadLabel,
-    ProjectionCodebook,
-    ShiftHoldMetric,
-)
+from vad_turn_taking.metrics import ShiftHoldMetric
+from vad_turn_taking.vad_projection import VadLabel, ProjectionCodebook
 
 
 class VadCondition(nn.Module):
@@ -439,17 +435,14 @@ class VPModel(pl.LightningModule):
 
     def test_epoch_end(self, outputs) -> None:
         r = self.test_metric.compute()
-        self.log("test/f1_weighted", r["f1_weighted"])
-        self.log("test/f1_shift", r["shift"]["f1"])
-        self.log("test/shift_precision", r["shift"]["precision"])
-        self.log("test/shift_recall", r["shift"]["recall"])
-        self.log("test/shift_support", r["shift"]["support"])
-        self.log("test/f1_hold", r["hold"]["f1"])
-        self.log("test/hold_precision", r["hold"]["precision"])
-        self.log("test/hold_recall", r["hold"]["recall"])
-        self.log("test/hold_support", r["hold"]["support"])
+        for metric_name, values in r.items():
+            if isinstance(values, dict):
+                for val_name, val in values.items():
+                    if not val_name in ["tp", "tn", "fp", "fn"]:
+                        self.log(f"test/{metric_name}_{val_name}", val)
+            else:
+                self.log(f"test/{metric_name}", values)
         self.test_metric.reset()
-        # self.log('val/hold_shift', self.val_metric)
 
     @property
     def run_name(self):
