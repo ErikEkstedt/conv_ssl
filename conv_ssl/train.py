@@ -2,6 +2,7 @@
 from argparse import ArgumentParser
 from os import makedirs, environ
 
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
@@ -14,6 +15,9 @@ import wandb
 
 PROJECT = "VPModel"
 SAVEDIR = "runs/VPModel"
+
+torch.backends.cudnn.deterministic = True
+torch.use_deterministic_algorithms(mode=True)
 
 
 class WandbArtifactCallback(pl.Callback):
@@ -51,6 +55,7 @@ def train():
     parser.add_argument("--animation_n", default=10, type=int)
     args = parser.parse_args()
     pl.seed_everything(args.seed)
+    args.deterministic = True
 
     local_rank = environ.get("LOCAL_RANK", 0)
 
