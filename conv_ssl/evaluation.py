@@ -1,4 +1,5 @@
 import math
+from os.path import basename, dirname, exists, join
 import matplotlib.pyplot as plt
 
 import torch
@@ -9,7 +10,64 @@ from conv_ssl.model import VPModel
 from conv_ssl.plot_utils import plot_next_speaker_probs, plot_all_labels
 from datasets_turntaking import DialogAudioDM
 
-from vad_turn_taking import DialogEvents
+from vad_turn_taking import DialogEvents, ProjectionCodebook
+
+
+def run_path_to_project_id(run_path):
+    id = basename(run_path)  # 1xon133f
+    project = dirname(run_path)  #  how_so/ULMProjection
+    return project, id
+
+
+def run_path_to_artifact_url(run_path, version="v1"):
+    """
+    run_path: "how_so/ULMProjection/1xon133f"
+
+    artifact_url = "how_so/ULMProjection/model-1xon133f:v1"
+    """
+    project, id = run_path_to_project_id(run_path)
+
+    artifact_path = project + "/" + "model-" + id + ":" + version
+    return artifact_path
+
+
+def get_checkpoint(run_path, version="v1", artifact_dir="./artifacts"):
+    """
+    On information tab in WandB find 'Run Path' and copy to clipboard
+
+    ---------------------------------------------------------
+    run_path:       how_so/ULMProjection/1tokrds0
+    ---------------------------------------------------------
+    project:        how_so/ULMProjection
+    id:             1tokrds0
+    artifact_url:   how_so/ULMProjection/model-1xon133f:v1
+    checkpoint:     ${artifact_dir}/model-3hysqnmt:v1/model.ckpt
+    ---------------------------------------------------------
+    """
+    import wandb
+
+    # project, id = run_path_to_project_id(run_path)
+    artifact_url = run_path_to_artifact_url(run_path, version)
+    model_name = basename(artifact_url)
+    checkpoint = join(artifact_dir, model_name, "model.ckpt")
+
+    if not exists(checkpoint):
+        # URL: always '/'
+        with wandb.init() as run:
+            artifact = run.use_artifact(artifact_url, type="model")
+            _ = artifact.download()
+    return checkpoint
+
+
+def load_metadata(run_path):
+    import wandb
+
+    if not run_path.startswith("/"):
+        run_path = "/" + run_path
+
+    api = wandb.Api()
+    run = api.run(run_path)
+    return run
 
 
 def to_device(batch, device="cuda"):
@@ -64,13 +122,13 @@ def smooth_gaussian(x, N, sigma=1):
 
 
 def explanation():
-    vad_projection_head = VadProjection()
-    print("on_silent_shift: ", tuple(vad_projection_head.on_silent_shift.shape))
-    print("on_silent_hold: ", tuple(vad_projection_head.on_silent_hold.shape))
-    print("on_active_shift: ", tuple(vad_projection_head.on_active_shift.shape))
-    print("on_active_hold: ", tuple(vad_projection_head.on_active_hold.shape))
+    vad_projection = ProjectionCodebook()
+    print("on_silent_shift: ", tuple(vad_projection.on_silent_shift.shape))
+    print("on_silent_hold: ", tuple(vad_projection.on_silent_hold.shape))
+    print("on_active_shift: ", tuple(vad_projection.on_active_shift.shape))
+    print("on_active_hold: ", tuple(vad_projection.on_active_hold.shape))
     print("--------------------------------------------")
-    plot_all_labels(vad_projection_head, next_speaker=0)
+    plot_all_labels(vad_projection, next_speaker=0)
 
 
 def load_dm(model, test=False, vad_history=None, batch_size=4, num_workers=4):
@@ -360,7 +418,7 @@ if __name__ == "__main__":
     tw1.plot(next_probs[:, 1], label="B prob", color="k")
     tw1.set_ylim([0, 1.05])
     tw1.set_yticks([])
-    plt.pause(0.1)
+    plt.show()
     print("F1_w: ", r["f1_weighted"])
     print("Shift F1: ", r["shift"]["f1"])
     print("Hold F1: ", r["hold"]["f1"])

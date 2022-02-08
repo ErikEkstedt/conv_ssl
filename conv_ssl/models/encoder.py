@@ -184,12 +184,22 @@ class EncoderPretrained(nn.Module):
     def _cpc(self, waveform):
         if waveform.ndim < 3:
             waveform = waveform.unsqueeze(1)  # channel dim
-        c, z, _ = self.encoder(waveform, None)
 
+        # Backwards using only the encoder encounters:
+        # ---------------------------------------------------
+        # RuntimeError: one of the variables needed for gradient computation
+        # has been modified by an inplace operation:
+        # [torch.FloatTensor [4, 256, 1000]], which is output 0 of ReluBackward0, is at version 1;
+        # expected version 0 instead. Hint: enable anomaly detection to find
+        # the operation that failed to compute its gradient, with
+        # torch.autograd.set_detect_anomaly(True).
+        z = self.encoder.gEncoder(waveform)  # .permute(0, 2, 1)
+        z = einops.rearrange(z, "b c n -> b n c")
+
+        # However, if we feed through gAR we do not encounter that problem...
         if self.encoder_layer > 0:
-            return c
-        else:
-            return z
+            z = self.encoder.gAR(z)
+        return z
 
     def encode(self, waveform):
         z = None
@@ -201,7 +211,6 @@ class EncoderPretrained(nn.Module):
             z = self._wav2vec(waveform)
         elif self.conf["encoder"]["type"] == "cpc":
             z = self._cpc(waveform)
-
         if self.downsampler is not None:
             z = self.downsampler(z)
         return z
