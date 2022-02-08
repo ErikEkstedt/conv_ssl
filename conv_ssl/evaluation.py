@@ -5,10 +5,11 @@ import torch
 import torch.nn.functional as F
 from pytorch_lightning import Trainer, Callback
 
-from conv_ssl.model import VPModel, ShiftHoldMetric
+from conv_ssl.model import VPModel
 from conv_ssl.plot_utils import plot_next_speaker_probs, plot_all_labels
 from datasets_turntaking import DialogAudioDM
-from datasets_turntaking.features.vad import VAD, VadProjection, DialogEvents
+
+from vad_turn_taking import DialogEvents
 
 
 def to_device(batch, device="cuda"):
@@ -72,11 +73,26 @@ def explanation():
     plot_all_labels(vad_projection_head, next_speaker=0)
 
 
-def load_dm(model, test=False, vad_history=None):
+def load_dm(model, test=False, vad_history=None, batch_size=4, num_workers=4):
     data_conf = DialogAudioDM.load_config()
 
     if vad_history is not None:
         data_conf["dataset"]["vad_history"] = vad_history
+
+    # dm = DialogAudioDM(
+    #     datasets=data_conf["dataset"]["datasets"],
+    #     type=data_conf["dataset"]["type"],
+    #     audio_duration=data_conf["dataset"]["audio_duration"],
+    #     audio_normalize=data_conf["dataset"]["audio_normalize"],
+    #     audio_overlap=data_conf["dataset"]["audio_overlap"],
+    #     sample_rate=data_conf["dataset"]["sample_rate"],
+    #     vad_hz=model.frame_hz,
+    #     vad_bin_times=model.conf["vad_class_prediction"]["bin_times"],
+    #     vad_history=data_conf["dataset"]["vad_history"],
+    #     vad_history_times=data_conf["dataset"]["vad_history_times"],
+    #     batch_size=batch_size,
+    #     num_workers=num_workers,
+    # )
 
     dm = DialogAudioDM(
         datasets=data_conf["dataset"]["datasets"],
@@ -86,11 +102,11 @@ def load_dm(model, test=False, vad_history=None):
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
         vad_hz=model.frame_hz,
-        vad_bin_times=model.conf["vad_class_prediction"]["bin_times"],
+        vad_bin_times=model.conf["vad_projection"]["bin_times"],
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
-        batch_size=4,
-        num_workers=4,
+        batch_size=batch_size,
+        num_workers=num_workers,
     )
     dm.prepare_data()
     stage = "fit"
@@ -256,32 +272,103 @@ if __name__ == "__main__":
     # chpt = "checkpoints/wav2vec_epoch=6-val_loss=2.42136.ckpt"
     # chpt = "checkpoints/hubert_epoch=18-val_loss=1.61074.ckpt"
     # chpt = "checkpoints/w2v/epoch=29-step=28229.ckpt"
-    chpt = "checkpoints/w2v/epoch=80-step=76220.ckpt"
+    # chpt = "checkpoints/w2v/epoch=80-step=76220.ckpt"
+    chpt = "checkpoints/w2v/epoch=80.ckpt"
     model = VPModel.load_from_checkpoint(chpt)
     model.to("cuda")
     model.eval()
     dm = load_dm(model, test=False)
-
     # Single Plots
     # diter = iter(dm.val_dataloader())
     # batch = next(diter)
     # plot_batch(model, batch)
-
     # evaluation
     dloader = dm.val_dataloader()
-
     callbacks = []
-    callbacks = [AblationCallback(vad_history="reverse")]
-
-    trainer = Trainer(gpus=-1, limit_test_batches=200, callbacks=callbacks)
+    # callbacks = [AblationCallback(vad_history="reverse")]
+    trainer = Trainer(gpus=-1, limit_test_batches=100, callbacks=callbacks)
     # trainer = Trainer(gpus=-1, limit_test_batches=200)
     result = trainer.test(model, dataloaders=dloader, verbose=False)
     result = result[0]
-    result
+    print(result)
+
+    ##########################################################################
+    # Print score and visualize (batch_size=1)
+    from vad_turn_taking.plot_utils import plot_events
+
+    dm = load_dm(model, test=False, batch_size=1, num_workers=0)
+    diter = iter(dm.val_dataloader())
+
+    batch = next(diter)
+    batch = to_device(batch, model.device)
+    with torch.no_grad():
+        loss, out, batch = model.shared_step(batch)
+        if model.test_metric is None:
+            model.test_metric = ShiftHoldMetric()
+        else:
+            model.test_metric.reset()
+        next_probs = model.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
+        model.test_metric.update(next_probs, vad=batch["vad"])
+        r = model.test_metric.compute()
+        # def update(self, p_next, vad):
+        # Find valid event-frames
+        hold, shift = DialogEvents.on_silence(
+            batch["vad"],
+            start_pad=model.test_metric.frame_start_pad,
+            target_frames=model.test_metric.frame_target_duration,
+            horizon=model.test_metric.frame_horizon,
+            min_context=model.test_metric.frame_min_context,
+            min_duration=model.test_metric.frame_min_duration,
+        )
+        # Find active segment pre-events
+        pre_hold, pre_shift = DialogEvents.get_active_pre_events(
+            batch["vad"],
+            hold,
+            shift,
+            start_pad=model.test_metric.frame_start_pad,
+            active_frames=model.test_metric.frame_pre_active,
+            min_context=model.test_metric.frame_min_context,
+        )
+        # ##################################################################
+        # Find Backchannels
+        backchannels = DialogEvents.extract_bc_candidates(
+            batch["vad"],
+            pre_silence_frames=model.test_metric.bc_pre_silence_frames,
+            post_silence_frames=model.test_metric.bc_post_silence_frames,
+            max_active_frames=model.test_metric.bc_max_active_frames,
+        )
+    b = 0
+    vad = batch["vad"][b].cpu()
+    hold = hold[b].cpu()
+    shift = shift[b].cpu()
+    pre_hold = pre_hold[b].cpu()
+    pre_shift = pre_shift[b].cpu()
+    backchannels = backchannels[b].cpu()
+    next_probs = next_probs[b].cpu()
+    ev = torch.logical_or(backchannels[..., 0], backchannels[..., 1])
+    fig, ax = plt.subplots(2, 1, sharex=True, figsize=(16, 9))
+    _ = plot_events(vad, hold=hold.cpu(), shift=shift.cpu(), event=ev, ax=ax[0])
+    _ = plot_events(vad, hold=pre_hold.cpu(), shift=pre_shift.cpu(), ax=ax[0])
+    tw0 = ax[0].twinx()
+    tw0.plot(next_probs[:, 0], label="A prob", color="k")
+    tw0.set_ylim([0, 1.05])
+    tw0.set_yticks([])
+    # B
+    _ = plot_events(vad, hold=hold.cpu(), shift=shift.cpu(), event=ev, ax=ax[1])
+    _ = plot_events(vad, hold=pre_hold.cpu(), shift=pre_shift.cpu(), ax=ax[1])
+    tw1 = ax[1].twinx()
+    tw1.plot(next_probs[:, 1], label="B prob", color="k")
+    tw1.set_ylim([0, 1.05])
+    tw1.set_yticks([])
+    plt.pause(0.1)
+    print("F1_w: ", r["f1_weighted"])
+    print("Shift F1: ", r["shift"]["f1"])
+    print("Hold F1: ", r["hold"]["f1"])
+    print("BC: ", r["bc"])
 
     # dloader = dm.test_dataloader()
     # single_metric
-    result = evaluation(model, dloader, event_start_pad=5, event_target_duration=1)
+    # result = evaluation(model, dloader, event_start_pad=5, event_target_duration=1)
     # val: pad=5, dur=1
     #  'test_loss': 2.0851874351501465,
     #  'test_loss_vp': 2.0851874351501465,
@@ -294,7 +381,7 @@ if __name__ == "__main__":
     #  'test/hold_precision': 0.9391277432441711,
     #  'test/hold_recall': 0.95414799451828,
     #  'test/hold_support': 22071.0
-    tot = result["test/shift_support"] + result["test/hold_support"]
+    # tot = result["test/shift_support"] + result["test/hold_support"]
 
     # VAD - reverse
     # 'test_loss': 9.88
@@ -355,54 +442,54 @@ if __name__ == "__main__":
 
     # TODO: extract all eval from single forward (no need to forward again and again, that's silly)
     # aggregate metrics
-    agg_res = metric_aggregation(
-        model, dloader, pads=[10, 20, 60], durs=[1, 10, 20, 60]
-    )
-
-    pad_dur = []
-    total_events = []
-    f1w = []
-    shift_ratio = []
-    for pad_name, metric_durs in agg_res.items():
-        # p = int(pad_name.split("_")[-1])
-        tmp_f1 = []
-        tmp_rat = []
-        total = []
-        for dur_name, m in metric_durs.items():
-            # d = int(dur_name.split("_")[-1])
-            # F1
-            f1w_tmp = m["test/f1_weighted"]
-            tmp_f1.append(f1w_tmp)
-            # shift-ratio
-            tot = m["test/shift_support"] + m["test/hold_support"]
-            rs = m["test/shift_support"] / tot
-            tmp_rat.append(rs)
-            total.append(tot)
-        f1w.append(tmp_f1)
-        shift_ratio.append(tmp_rat)
-    f1w = torch.tensor(f1w)
-    shift_ratio = torch.tensor(shift_ratio)
-    total = torch.tensor(total)
-    print(f1w)
-    print(shift_ratio)
-    print(total)
-
-    # Plot result: matplots, table
-    # Save result: checkpoint, model.conf
-    # torch.save(agg_res, result_path)
-
-    agg_res = torch.load("aggregate_result_1000.pt")
-
-    # ratio
-    rs = result["test/shift_support"] / (
-        result["test/shift_support"] + result["test/hold_support"]
-    )
-    rh = 1 - rs
-
-    print("F1 weighted: ", result["test/f1_weighted"])
-    print("F1 shift: ", result["test/f1_shift"])
-    print(f"Shifts: {round(rs*100, 2)}%")
-    print(f"Holds: {round(rh*100, 2)}%")
+    # agg_res = metric_aggregation(
+    #     model, dloader, pads=[10, 20, 60], durs=[1, 10, 20, 60]
+    # )
+    #
+    # pad_dur = []
+    # total_events = []
+    # f1w = []
+    # shift_ratio = []
+    # for pad_name, metric_durs in agg_res.items():
+    #     # p = int(pad_name.split("_")[-1])
+    #     tmp_f1 = []
+    #     tmp_rat = []
+    #     total = []
+    #     for dur_name, m in metric_durs.items():
+    #         # d = int(dur_name.split("_")[-1])
+    #         # F1
+    #         f1w_tmp = m["test/f1_weighted"]
+    #         tmp_f1.append(f1w_tmp)
+    #         # shift-ratio
+    #         tot = m["test/shift_support"] + m["test/hold_support"]
+    #         rs = m["test/shift_support"] / tot
+    #         tmp_rat.append(rs)
+    #         total.append(tot)
+    #     f1w.append(tmp_f1)
+    #     shift_ratio.append(tmp_rat)
+    # f1w = torch.tensor(f1w)
+    # shift_ratio = torch.tensor(shift_ratio)
+    # total = torch.tensor(total)
+    # print(f1w)
+    # print(shift_ratio)
+    # print(total)
+    #
+    # # Plot result: matplots, table
+    # # Save result: checkpoint, model.conf
+    # # torch.save(agg_res, result_path)
+    #
+    # agg_res = torch.load("aggregate_result_1000.pt")
+    #
+    # # ratio
+    # rs = result["test/shift_support"] / (
+    #     result["test/shift_support"] + result["test/hold_support"]
+    # )
+    # rh = 1 - rs
+    #
+    # print("F1 weighted: ", result["test/f1_weighted"])
+    # print("F1 shift: ", result["test/f1_shift"])
+    # print(f"Shifts: {round(rs*100, 2)}%")
+    # print(f"Holds: {round(rh*100, 2)}%")
 
     # f1 = 2 * 0.949 * 0.963 / (0.949 + 0.963)
 

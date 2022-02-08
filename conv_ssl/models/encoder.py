@@ -181,6 +181,16 @@ class EncoderPretrained(nn.Module):
             z = einops.rearrange(z, "... c t -> ... t c")
         return z
 
+    def _cpc(self, waveform):
+        if waveform.ndim < 3:
+            waveform = waveform.unsqueeze(1)  # channel dim
+        c, z, _ = self.encoder(waveform, None)
+
+        if self.encoder_layer > 0:
+            return c
+        else:
+            return z
+
     def encode(self, waveform):
         z = None
         if self.conf["encoder"]["type"] in ["hubert_base", "wav2vec2_base"]:
