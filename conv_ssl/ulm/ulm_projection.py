@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 
 mpl.use("Agg")
 
-from conv_ssl.models import ProjectionModel, EncoderPretrained, CHECKPOINTS
+from conv_ssl.models import ProjectionModel, Encoder, CHECKPOINTS
 from conv_ssl.vad_pred_animation import VadPredAnimator
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
@@ -38,7 +38,7 @@ class ULMProjection(pl.LightningModule):
         if conf is None:
             conf = self.conf
         if conf["encoder"]["pretrained"]:
-            encoder = EncoderPretrained(conf, load=load)
+            encoder = Encoder(conf, load=load)
             # update dimension of encoder
             self.conf["encoder"]["dim"] = encoder.conf["encoder"]["dim"]
             return encoder

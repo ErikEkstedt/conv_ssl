@@ -14,7 +14,7 @@ import einops
 
 from datasets_turntaking import DialogAudioDM
 
-from conv_ssl.models.encoder import EncoderPretrained
+from conv_ssl.models.encoder import Encoder
 from conv_ssl.models.kmean import KMeanEmbedding, KmeanSKLearn
 from conv_ssl.utils import count_parameters
 
@@ -45,7 +45,7 @@ class SegmentDatasetBuilder:
     def __init__(self, args) -> None:
         self.args = args
         self.encoder = None
-        self.model_config = EncoderPretrained.load_config(args.conf)
+        self.model_config = Encoder.load_config(args.conf)
         self.dm = self._load_datamodule()
         self.paths = self._filepaths()
         makedirs(self.paths["root"], exist_ok=True)
@@ -95,7 +95,7 @@ class SegmentDatasetBuilder:
         spinner = Halo(text="Loading Model", spinner="dots")
         spinner.start()
 
-        model = EncoderPretrained(self.model_config)
+        model = Encoder(self.model_config)
         model.device = "cpu"
         if torch.cuda.is_available():
             model = model.to("cuda")
