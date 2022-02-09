@@ -58,8 +58,11 @@ class AR(nn.Module):
                 sizeSeq=transfomer_kwargs["sizeSeq"],
                 abspos=transfomer_kwargs["abspos"],
             )
-            if not transfomer_kwargs["use_pos_emb"] and self.dim != self.input_dim:
-                ret = nn.Sequential(nn.Linear(self.input_dim, self.dim), ret)
+            # if not transfomer_kwargs["use_pos_emb"] and self.dim != self.input_dim:
+            if self.dim != self.input_dim:
+                ret = nn.Sequential(
+                    nn.Linear(self.input_dim, self.dim), nn.LayerNorm(self.dim), ret
+                )
             return ret
         return ret
 

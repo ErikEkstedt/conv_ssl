@@ -5,7 +5,7 @@ import einops
 from einops.layers.torch import Rearrange
 import pytorch_lightning as pl
 
-from conv_ssl.models import EncoderPretrained, AR
+from conv_ssl.models import Encoder, AR
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
 from vad_turn_taking.metrics import ShiftHoldMetric
@@ -89,7 +89,7 @@ class ProjectionModel(nn.Module):
             self.projection_head = nn.Linear(input_dim, self.n_classes)
 
     def build_encoder(self, conf):
-        encoder = EncoderPretrained(conf)
+        encoder = Encoder(conf)
         return encoder
 
     def build_ulm(self, input_dim, conf):
@@ -182,7 +182,8 @@ class ProjectionModel(nn.Module):
         vc = self.vad_condition(vad, vad_history)
 
         if self.conf["vad_cond"]["pre_ulm"]:
-            z += vc[:, : z.shape[1]]
+            # z += vc[:, : z.shape[1]] # don't do inplace! deterministic/cuda fails
+            z = z + vc[:, : z.shape[1]]
 
         # logits_ar & logits_vp
         if self.ulm is not None:
@@ -190,7 +191,8 @@ class ProjectionModel(nn.Module):
             out["logits_ar"] = self.ulm_head(z)
 
         if self.conf["vad_cond"]["post_ulm"]:
-            z += vc[:, : z.shape[1]]
+            # z += vc[:, : z.shape[1]]
+            z = z + vc[:, : z.shape[1]]
 
         if self.ar is not None:
             z = self.ar(z)["z"]
