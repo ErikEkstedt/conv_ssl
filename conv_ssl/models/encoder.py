@@ -76,11 +76,13 @@ class Downsample(nn.Module):
         return x
 
 
-class EncoderPretrained(nn.Module):
+class Encoder(nn.Module):
     """
     Encoder (pretrained, default='hubert_base')
     includes a pretrained encoder and pretrained quantized feature embeddings (kmeans)
     """
+
+    NON_PRETRAINED = ["gru", "lstm", "cnn"]
 
     def __init__(self, conf, load=False, freeze=True):
         super().__init__()
@@ -88,8 +90,13 @@ class EncoderPretrained(nn.Module):
         self.frame_hz = conf["encoder"]["frame_hz"]
 
         # Encoder: Hubert (torchaudio) `output_layer` defines which representations to use
-        self.encoder = load_pretrained_encoder(conf["encoder"]["type"])
         self.encoder_layer = conf["encoder"]["output_layer"]
+        if conf["encoder"]["type"] in self.NON_PRETRAINED:
+            self.encoder = nn.Linear(
+                conf["encoder"]["input_dim"], conf["encoder"]["dim"]
+            )
+        else:
+            self.encoder = load_pretrained_encoder(conf["encoder"]["type"])
 
         # Downsampling
         self.downsampler = None
@@ -125,8 +132,9 @@ class EncoderPretrained(nn.Module):
     def encoder_conf(self, conf):
         enc_conf = {"encoder": conf["encoder"]}
         enc_conf["quantizer"] = conf["quantizer"]
-        enc_conf["encoder"]["dim"] = MODEL_DIM[conf["encoder"]["type"]]
-        enc_conf["encoder"]["frame_hz"] = MODEL_HZ[conf["encoder"]["type"]]
+        if not conf["encoder"]["type"] in self.NON_PRETRAINED:
+            enc_conf["encoder"]["dim"] = MODEL_DIM[conf["encoder"]["type"]]
+            enc_conf["encoder"]["frame_hz"] = MODEL_HZ[conf["encoder"]["type"]]
         return enc_conf
 
     @property
@@ -140,7 +148,7 @@ class EncoderPretrained(nn.Module):
     @staticmethod
     def load_config(path=None, args=None, format="dict"):
         if path is None:
-            path = EncoderPretrained.default_config_path()
+            path = Encoder.default_config_path()
         return load_config(path, args=args, format=format)
 
     @staticmethod
@@ -211,6 +219,10 @@ class EncoderPretrained(nn.Module):
             z = self._wav2vec(waveform)
         elif self.conf["encoder"]["type"] == "cpc":
             z = self._cpc(waveform)
+        else:
+            z = self.encoder(waveform)
+            print("Enc Z: ", tuple(z.shape))
+
         if self.downsampler is not None:
             z = self.downsampler(z)
         return z
@@ -242,12 +254,12 @@ if __name__ == "__main__":
     # else:
     #     assert False, f"{name} is not found"
 
-    conf = EncoderPretrained.load_config()
+    conf = Encoder.load_config()
     conf["encoder"]["type"] = "wav2vec"
     conf["encoder"]["target_frame_hz"] = 20
     conf["encoder"]["downsample"] = "mean"
     conf["quantizer"]["vector_path"] = None
-    model = EncoderPretrained(conf)
+    model = Encoder(conf)
     n = count_parameters(model, learnable=True)
     print("parameters: ", n)
 

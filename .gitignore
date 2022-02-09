@@ -131,6 +131,7 @@ dmypy.json
 # Custom
 assets/
 checkpoints/
+swb_dataset/
 runs/
 tmp_data/
 assets_local/

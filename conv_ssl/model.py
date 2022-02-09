@@ -413,10 +413,18 @@ class VPModel(pl.LightningModule):
         self.val_metric.update(next_probs, vad=batch["vad"])
 
     def validation_epoch_end(self, outputs) -> None:
-        # self.log('val/hold_shift', self.val_metric)
         r = self.val_metric.compute()
-        self.log("val_f1_weighted", r["f1_weighted"])
-        self.log("val_f1_shift", r["shift"]["f1"])
+        for metric_name, values in r.items():
+            if isinstance(values, dict):
+                for val_name, val in values.items():
+                    if val_name in ["tp", "tn", "fp", "fn"]:
+                        continue
+                    if "support" in val_name:
+                        continue
+
+                    self.log(f"val_{metric_name}_{val_name}", val)
+            else:
+                self.log(f"val_{metric_name}", values)
         self.val_metric.reset()
 
     def test_step(self, batch, batch_idx, **kwargs):
