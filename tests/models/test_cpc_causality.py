@@ -32,8 +32,8 @@ def batch():
     return {"waveform": waveform, "vad": vad, "vad_history": vad_history}
 
 
-@pytest.mark.models
 @pytest.mark.cpc
+@pytest.mark.models
 @pytest.mark.causality
 @pytest.mark.parametrize(
     ("output_layer", "ulm_layers"), [(1, 0), (0, 0), (1, 1), (0, 1)]
