@@ -130,6 +130,7 @@ dmypy.json
 
 # Custom
 assets/
+checkpoints/
 runs/
 tmp_data/
 assets_local/
