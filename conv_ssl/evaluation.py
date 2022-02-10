@@ -7,11 +7,15 @@ import torch.nn.functional as F
 from pytorch_lightning import Trainer, Callback
 
 from conv_ssl.model import VPModel
+from conv_ssl.plot_utils import plot_next_speaker_probs, plot_all_labels, plot_window
 from conv_ssl.utils import everything_deterministic
-from conv_ssl.plot_utils import plot_next_speaker_probs, plot_all_labels
 from datasets_turntaking import DialogAudioDM
 
 from vad_turn_taking import DialogEvents, ProjectionCodebook
+
+import matplotlib as mpl
+
+mpl.use("TkAgg")
 
 
 def run_path_to_project_id(run_path):
@@ -319,294 +323,80 @@ class AblationCallback(Callback):
                 batch["vad"] = torch.zeros_like(batch["vad"])
 
 
+def test_causality(batch, model):
+    step = 500
+
+    batch = to_device(batch, model.device)
+    batch["waveform"].requires_grad = True
+    loss, _, _ = model.shared_step(batch, reduction="none")
+    loss["vp"][:, step].norm().backward()
+    g = batch["waveform"].grad.abs().cpu()
+
+    b = 0
+    fig, ax = plt.subplots(1, 1)
+    fig.suptitle(model.run_name)
+    ax.plot(g[b] / g[b].max())
+    plt.show()
+
+
 if __name__ == "__main__":
-    from vad_turn_taking.plot_utils import plot_events
-    import matplotlib as mpl
-
-    mpl.use("TkAgg")
-
     everything_deterministic()
 
     # TODO: load artifact from wandb
 
-    # chpt = "checkpoints/wav2vec_epoch=6-val_loss=2.42136.ckpt"
-    # chpt = "checkpoints/hubert_epoch=18-val_loss=1.61074.ckpt"
-    # chpt = "checkpoints/w2v/epoch=29-step=28229.ckpt"
-    # chpt = "checkpoints/w2v/epoch=80-step=76220.ckpt"
-    # chpt = "checkpoints/w2v/epoch=80.ckpt"
-    # chpt = "checkpoints/cpc/epoch=2-step=2116.ckpt"
-    # chpt = "checkpoints/cpc/epoch=16-step=15995.ckpt"
-    chpt = "checkpoints/cpc/epoch=21-step=20700.ckpt"
-    model = VPModel.load_from_checkpoint(chpt)
-    model = model.to("cuda")
+    checkpoints = [
+        "checkpoints/cpc/cpc_04_14.ckpt",
+        "checkpoints/cpc/cpc_04_24.ckpt",
+        "checkpoints/cpc/cpc_04_44.ckpt",
+    ]
+    # chpt = "checkpoints/cpc/cpc_04_14.ckpt"
+    # chpt = "checkpoints/cpc/cpc_04_24.ckpt"
+    # chpt = "checkpoints/cpc/cpc_04_44.ckpt"
+
+    results = {}
+    for chpt in checkpoints:
+        model = VPModel.load_from_checkpoint(chpt)
+        model = model.to("cuda")
+        dm = load_dm(model, test=True)
+        trainer = Trainer(gpus=-1, limit_test_batches=20, deterministic=True)
+        result = trainer.test(model, dataloaders=dm.test_dataloader(), verbose=False)
+        name = basename(chpt)
+        results[name] = result[0]
+    torch.save(results, "evaluation_scores.pt")
+
     # model.eval()
-
-    dm = load_dm(model, test=False)
-
-    batch = next(iter(dm.val_dataloader()))
-
-    # Single Plots
-    # diter = iter(dm.val_dataloader())
+    # print(model.val_metric)
     # batch = next(diter)
-    # plot_batch(model, batch)
-    # evaluation
-    dloader = dm.val_dataloader()
-    callbacks = []
-    # callbacks = [AblationCallback(vad_history="reverse")]
-    # trainer = Trainer(gpus=-1, limit_test_batches=100, callbacks=callbacks)
-    # deterministic use env: CUBLAS_WORKSPACE_CONFIG=:4096:8
-    # trainer = Trainer(gpus=-1, callbacks=callbacks, deterministic=True)
-    trainer = Trainer(gpus=-1, limit_test_batches=200, deterministic=True)
-    result = trainer.test(model, dataloaders=dloader, verbose=False)
-    result = result[0]
-    print(result)
-
-    ##########################################################################
-    # Print score and visualize (batch_size=1)
-
-    # dm = load_dm(model, test=False, batch_size=1, num_workers=0)
-    # diter = iter(dm.val_dataloader())
-    #
-    # batch = next(diter)
-    # step = 500
-    # # optim = model.configure_optimizers()
-    # # optim.zero_grad()
-    # batch = to_device(next(diter), model.device)
-    # # batch = {
-    # #     "waveform": torch.randn(1, 160000, device=torch.device("cuda")),
-    # #     "vad": torch.zeros_like(batch["vad"]),
-    # #     "vad_history": torch.ones_like(batch["vad_history"]),
-    # # }
-    # batch["waveform"].requires_grad = True
-    # # out = model(
-    # #     waveform=batch["waveform"],
-    # #     vad=batch["vad"][:, :1000],
-    # #     vad_history=batch["vad_history"],
-    # # )
-    # loss, out, batch = model.shared_step(batch, reduction="none")
-    # # backward
-    # # out["logits_vp"][:, step].norm().backward()
-    # loss["vp"][:, step].norm().backward()
-    # g = batch["waveform"].grad.abs().cpu()
-    # b = 0
-    # fig, ax = plt.subplots(1, 1)
-    # fig.suptitle(model.run_name)
-    # ax.plot(g[b] / g[b].max())
-    # # plt.pause(0.1)
-    # plt.show()
-    #
     # batch = to_device(batch, model.device)
+    # model.val_metric.reset()
     # with torch.no_grad():
     #     loss, out, batch = model.shared_step(batch)
-    #     if model.test_metric is None:
-    #         model.test_metric = ShiftHoldMetric()
-    #     else:
-    #         model.test_metric.reset()
     #     next_probs = model.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
-    #     model.test_metric.update(next_probs, vad=batch["vad"])
-    #     r = model.test_metric.compute()
-    #     # def update(self, p_next, vad):
-    #     # Find valid event-frames
-    #     hold, shift = DialogEvents.on_silence(
-    #         batch["vad"],
-    #         start_pad=model.test_metric.frame_start_pad,
-    #         target_frames=model.test_metric.frame_target_duration,
-    #         horizon=model.test_metric.frame_horizon,
-    #         min_context=model.test_metric.frame_min_context,
-    #         min_duration=model.test_metric.frame_min_duration,
-    #     )
-    #     # Find active segment pre-events
-    #     pre_hold, pre_shift = DialogEvents.get_active_pre_events(
-    #         batch["vad"],
-    #         hold,
-    #         shift,
-    #         start_pad=model.test_metric.frame_start_pad,
-    #         active_frames=model.test_metric.frame_pre_active,
-    #         min_context=model.test_metric.frame_min_context,
-    #     )
-    #     # ##################################################################
-    #     # Find Backchannels
-    #     backchannels = DialogEvents.extract_bc_candidates(
-    #         batch["vad"],
-    #         pre_silence_frames=model.test_metric.bc_pre_silence_frames,
-    #         post_silence_frames=model.test_metric.bc_post_silence_frames,
-    #         max_active_frames=model.test_metric.bc_max_active_frames,
-    #     )
+    #     events = model.val_metric.extract_events(batch["vad"])
+    #     model.val_metric.update(next_probs, vad=batch["vad"], events=events)
+    #     r = model.val_metric.compute()
+    #
     # b = 0
-    # vad = batch["vad"][b].cpu()
-    # hold = hold[b].cpu()
-    # shift = shift[b].cpu()
-    # pre_hold = pre_hold[b].cpu()
-    # pre_shift = pre_shift[b].cpu()
-    # backchannels = backchannels[b].cpu()
-    # next_probs = next_probs[b].cpu()
-    # ev = torch.logical_or(backchannels[..., 0], backchannels[..., 1])
-    # fig, ax = plt.subplots(2, 1, sharex=True, figsize=(16, 9))
-    # _ = plot_events(
-    #     vad, hold=hold.cpu(), shift=shift.cpu(), event=ev, ax=ax[0], vad_alpha=0.3
+    # fig, ax = plot_window(
+    #     next_probs[b].cpu(),
+    #     vad=batch["vad"][b].cpu(),
+    #     hold=events["hold"][b].cpu(),
+    #     shift=events["shift"][b].cpu(),
+    #     pre_hold=events["pre_hold"][b].cpu(),
+    #     pre_shift=events["pre_shift"][b].cpu(),
+    #     backchannels=events["backchannels"][b].cpu(),
+    #     plot_kwargs=dict(
+    #         alpha_event=0.2,
+    #         alpha_vad=0.6,
+    #         shift_hatch=".",
+    #         shift_pre_hatch=".",
+    #         hold_hatch="/",
+    #         hold_pre_hatch="/",
+    #         bc_hatch="x",
+    #         alpha_bc=0.2,
+    #         linewidth=2,
+    #     ),
+    #     plot=False,
     # )
-    # _ = plot_events(
-    #     vad, hold=pre_hold.cpu(), shift=pre_shift.cpu(), ax=ax[0], vad_alpha=0.3
-    # )
-    # tw0 = ax[0].twinx()
-    # tw0.plot(next_probs[:, 0], label="A prob", color="b", linewidth=2)
-    # tw0.set_ylim([0, 1.05])
-    # tw0.set_yticks([])
-    # # B
-    # _ = plot_events(
-    #     vad, hold=hold.cpu(), shift=shift.cpu(), event=ev, ax=ax[1], vad_alpha=0.3
-    # )
-    # _ = plot_events(
-    #     vad, hold=pre_hold.cpu(), shift=pre_shift.cpu(), ax=ax[1], vad_alpha=0.3
-    # )
-    # tw1 = ax[1].twinx()
-    # tw1.plot(next_probs[:, 1], label="B prob", color="orange", linewidth=2)
-    # tw1.set_ylim([0, 1.05])
-    # tw1.set_yticks([])
-    # print("F1_w: ", r["f1_weighted"])
-    # print("F1_pre_w: ", r["f1_pre_weighted"])
-    # print("Shift F1: ", r["shift"]["f1"])
-    # print("Hold F1: ", r["hold"]["f1"])
-    # print("BC: ", r["bc"])
+    #
     # plt.show()
-    #
-    # # dloader = dm.test_dataloader()
-    # # single_metric
-    # # result = evaluation(model, dloader, event_start_pad=5, event_target_duration=1)
-    # # val: pad=5, dur=1
-    # #  'test_loss': 2.0851874351501465,
-    # #  'test_loss_vp': 2.0851874351501465,
-    # #  'test/f1_weighted': 0.9111487865447998,
-    # #  'test/f1_shift': 0.7565796375274658,
-    # #  'test/shift_precision': 0.7849553823471069,
-    # #  'test/shift_recall': 0.7301838397979736,
-    # #  'test/shift_support': 5059.0,
-    # #  'test/f1_hold': 0.9465782642364502,
-    # #  'test/hold_precision': 0.9391277432441711,
-    # #  'test/hold_recall': 0.95414799451828,
-    # #  'test/hold_support': 22071.0
-    # # tot = result["test/shift_support"] + result["test/hold_support"]
-    #
-    # # VAD - reverse
-    # # 'test_loss': 9.88
-    # # 'test/f1_weighted': 0.8895
-    #
-    # # VAD - zero: (no events)
-    # # 'test_loss': 3.957580804824829,
-    #
-    # # VADHISTORY - reverse
-    # # 'test_loss': 2.1889231204986572,
-    # # 'test/f1_weighted': 0.8931927680969238,
-    #
-    # # vad-reverse, vad-history-equal
-    # # 'test_loss': 10.395157814025879,
-    # # 'test/f1_weighted': 0.9208936095237732,
-    # #  'test/f1_shift': 0.7450224757194519,
-    # #  'test/shift_precision': 0.7277289628982544,
-    # #  'test/shift_recall': 0.7631579041481018,
-    # #  'test/shift_support': 3040.0,
-    # #  'test/f1_hold': 0.9526422619819641,
-    # #  'test/hold_precision': 0.9568655490875244,
-    # #  'test/hold_recall': 0.9484560489654541,
-    # #  'test/hold_support': 16840.0}
-    #
-    # # VAD History
-    # # Normal
-    # #  'test/f1_weighted': 0.9286942481994629,
-    # # Equal vad_history
-    # #  'test/f1_weighted': 0.9206141233444214,
-    # # reverse vad_history
-    # #  'test/f1_weighted': 0.890008807182312,
-    #
-    # # {'test_loss': 2.076958179473877,
-    # #  'test_loss_vp': 2.076958179473877,
-    # #  'test/f1_weighted': 0.9271664023399353,
-    # #  'test/f1_shift': 0.7585858702659607,
-    # #  'test/shift_precision': 0.7768965363502502,
-    # #  'test/shift_recall': 0.7411184310913086,
-    # #  'test/shift_support': 3040.0,
-    # #  'test/f1_hold': 0.9575990438461304,
-    # #  'test/hold_precision': 0.9536513686180115,
-    # #  'test/hold_recall': 0.9615795612335205,
-    # #  'test/hold_support': 16840.0}
-    # ##################################################
-    # # NO VAD-HISTORY
-    # ##################################################
-    # # {'test_loss': 4.358254432678223,
-    # #  'test_loss_vp': 4.358254432678223,
-    # #  'test/f1_weighted': 0.5671782493591309,
-    # #  'test/f1_shift': 0.32110029458999634,
-    # #  'test/shift_precision': 0.20325487852096558,
-    # #  'test/shift_recall': 0.7641447186470032,
-    # #  'test/shift_support': 3040.0,
-    # #  'test/f1_hold': 0.611600935459137,
-    # #  'test/hold_precision': 0.9151579737663269,
-    # #  'test/hold_recall': 0.4592636525630951,
-    # #  'test/hold_support': 16840.0}
-    #
-    # # TODO: extract all eval from single forward (no need to forward again and again, that's silly)
-    # # aggregate metrics
-    # # agg_res = metric_aggregation(
-    # #     model, dloader, pads=[10, 20, 60], durs=[1, 10, 20, 60]
-    # # )
-    # #
-    # # pad_dur = []
-    # # total_events = []
-    # # f1w = []
-    # # shift_ratio = []
-    # # for pad_name, metric_durs in agg_res.items():
-    # #     # p = int(pad_name.split("_")[-1])
-    # #     tmp_f1 = []
-    # #     tmp_rat = []
-    # #     total = []
-    # #     for dur_name, m in metric_durs.items():
-    # #         # d = int(dur_name.split("_")[-1])
-    # #         # F1
-    # #         f1w_tmp = m["test/f1_weighted"]
-    # #         tmp_f1.append(f1w_tmp)
-    # #         # shift-ratio
-    # #         tot = m["test/shift_support"] + m["test/hold_support"]
-    # #         rs = m["test/shift_support"] / tot
-    # #         tmp_rat.append(rs)
-    # #         total.append(tot)
-    # #     f1w.append(tmp_f1)
-    # #     shift_ratio.append(tmp_rat)
-    # # f1w = torch.tensor(f1w)
-    # # shift_ratio = torch.tensor(shift_ratio)
-    # # total = torch.tensor(total)
-    # # print(f1w)
-    # # print(shift_ratio)
-    # # print(total)
-    # #
-    # # # Plot result: matplots, table
-    # # # Save result: checkpoint, model.conf
-    # # # torch.save(agg_res, result_path)
-    # #
-    # # agg_res = torch.load("aggregate_result_1000.pt")
-    # #
-    # # # ratio
-    # # rs = result["test/shift_support"] / (
-    # #     result["test/shift_support"] + result["test/hold_support"]
-    # # )
-    # # rh = 1 - rs
-    # #
-    # # print("F1 weighted: ", result["test/f1_weighted"])
-    # # print("F1 shift: ", result["test/f1_shift"])
-    # # print(f"Shifts: {round(rs*100, 2)}%")
-    # # print(f"Holds: {round(rh*100, 2)}%")
-    #
-    # # f1 = 2 * 0.949 * 0.963 / (0.949 + 0.963)
-    #
-    # # f1
-    # # [0.9180, 0.9118, 0.9151, 0.9050],
-    # # [0.9122, 0.9150, 0.9160, 0.9078],
-    # # [0.9035, 0.9008, 0.9091, 0.8789]
-    #
-    # # shift ratio
-    # # [0.1633, 0.1745, 0.1620, 0.1586],
-    # # [0.1727, 0.1620, 0.1543, 0.1617],
-    # # [0.1541, 0.1586, 0.1617, 0.1706]
-    # # events
-    # # [52197.,  8847.,  7007.,  2157.],
-    # # [ 8639.,  7007.,  5470.,  1540.],
-    # # [2888.0, 2157.0, 1540.0, 469.0]

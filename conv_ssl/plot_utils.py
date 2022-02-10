@@ -1,5 +1,8 @@
 import matplotlib.pyplot as plt
 import torch
+from torch.nn import Sequential
+import torchaudio.transforms as AT
+import numpy as np
 
 from datasets_turntaking.features.plot_utils import plot_melspectrogram
 
@@ -212,15 +215,16 @@ def plot_probs(probs, ax, label="shift %", color="r"):
     ax_ts.set_ylim([0, 1])
 
 
-def plot_area(oh, ax, label=None, color="b", alpha=1):
+def plot_area(oh, ax, y1=-1, y2=1, label=None, color="b", alpha=1, **kwargs):
     ax.fill_between(
         torch.arange(oh.shape[0]),
-        y1=-1,
-        y2=1,
+        y1=y1,
+        y2=y2,
         where=oh,
         color=color,
         alpha=alpha,
         label=label,
+        **kwargs
     )
 
 
@@ -509,4 +513,173 @@ def plot_next_speaker_probs(
     ax[-1].set_xlim([0, a_prob.shape[0]])
     if plot:
         plt.pause(0.1)
+    return fig, ax
+
+
+def plot_window(
+    probs,
+    vad,
+    hold,
+    shift,
+    pre_hold,
+    pre_shift,
+    backchannels,
+    plot_kwargs=dict(
+        alpha_event=0.2,
+        alpha_vad=0.6,
+        shift_hatch=".",
+        shift_pre_hatch=".",
+        hold_hatch="/",
+        hold_pre_hatch="/",
+        bc_hatch="x",
+        alpha_bc=0.2,
+        linewidth=2,
+    ),
+    ax=None,
+    figsize=(12, 6),
+    plot=False,
+):
+    fig = None
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        ax = [ax]
+
+    # cpu
+    probs = probs.detach().cpu()
+    vad = vad.detach().cpu()
+    hold = hold.detach().cpu()
+    shift = shift.detach().cpu()
+    pre_hold = pre_hold.detach().cpu()
+    pre_shift = pre_shift.detach().cpu()
+    backchannels = backchannels.detach().cpu()
+
+    n = 0
+    # Events
+    _ = plot_vad_oh(
+        vad,
+        ax=ax[n],
+        alpha=plot_kwargs["alpha_vad"],
+        legend_loc="upper right",
+        label=["B", "A"],
+    )
+
+    # Backchannels
+    if backchannels[..., 0].sum() > 0:
+        plot_area(
+            backchannels[..., 0],
+            color="b",
+            alpha=plot_kwargs["alpha_bc"],
+            hatch=plot_kwargs["bc_hatch"],
+            y1=-0.5,
+            y2=0,
+            ax=ax[n],
+        )
+    if backchannels[..., 1].sum() > 0:
+        plot_area(
+            backchannels[..., 1],
+            color="orange",
+            alpha=plot_kwargs["alpha_bc"],
+            hatch=plot_kwargs["bc_hatch"],
+            y1=0,
+            y2=0.5,
+            ax=ax[n],
+        )
+
+    # HOLD
+    if hold[:, 0].sum() > 0:
+        plot_area(
+            hold[:, 0],
+            color="b",
+            alpha=plot_kwargs["alpha_event"],
+            ax=ax[n],
+            hatch=plot_kwargs["hold_hatch"],
+            label="hold",
+        )
+    if hold[:, 1].sum() > 0:
+        plot_area(
+            hold[:, 1],
+            color="orange",
+            alpha=plot_kwargs["alpha_event"],
+            ax=ax[n],
+            hatch=plot_kwargs["hold_hatch"],
+            label="hold",
+        )
+    # PRE
+    if pre_hold[:, 0].sum() > 0:
+        plot_area(
+            pre_hold[:, 0],
+            color="b",
+            alpha=plot_kwargs["alpha_event"],
+            ax=ax[n],
+            hatch=plot_kwargs["hold_pre_hatch"],
+        )
+    if pre_hold[:, 1].sum() > 0:
+        plot_area(
+            pre_hold[:, 1],
+            color="orange",
+            alpha=plot_kwargs["alpha_event"],
+            ax=ax[n],
+            hatch=plot_kwargs["hold_pre_hatch"],
+        )
+
+    # HOLD
+    if shift[:, 0].sum() > 0:
+        plot_area(
+            shift[:, 0],
+            color="b",
+            alpha=plot_kwargs["alpha_event"],
+            ax=ax[n],
+            hatch=plot_kwargs["shift_hatch"],
+            label="shift",
+        )
+    if shift[:, 1].sum() > 0:
+        plot_area(
+            shift[:, 1],
+            color="orange",
+            alpha=plot_kwargs["alpha_event"],
+            ax=ax[n],
+            hatch=plot_kwargs["shift_hatch"],
+            label="shift",
+        )
+    if pre_shift[:, 0].sum() > 0:
+        plot_area(
+            pre_shift[:, 0],
+            color="b",
+            alpha=plot_kwargs["alpha_event"],
+            ax=ax[n],
+            hatch=plot_kwargs["shift_pre_hatch"],
+        )
+    if pre_shift[:, 1].sum() > 0:
+        plot_area(
+            pre_shift[:, 1],
+            color="orange",
+            alpha=plot_kwargs["alpha_event"],
+            ax=ax[n],
+            hatch=plot_kwargs["shift_pre_hatch"],
+        )
+
+    # Speaker Probs
+    axes = ax[n].twinx()
+
+    wa = torch.where(probs[:, 0] >= 0.5)[0]
+    wb = torch.where(probs[:, 1] >= 0.5)[0]
+    pa = np.zeros_like(probs[:, 0])
+    pb = np.zeros_like(probs[:, 0])
+    pa[wa] = probs[:, 0][wa]
+    pa[wb] = np.nan
+    pb[wb] = probs[:, 1][wb]
+    pb[wa] = np.nan
+
+    axes.plot(pa, color="b", linewidth=plot_kwargs["linewidth"], label="A is next")
+    axes.plot(pb, color="orange", linewidth=plot_kwargs["linewidth"], label="B is next")
+    axes.set_ylim([-0.05, 1.05])
+    axes.set_yticks([])
+
+    axes.legend(loc="upper left")
+    ax[n].legend(loc="lower left")
+
+    if plot:
+        plt.tight_layout()
+        plt.pause(0.001)
+
     return fig, ax

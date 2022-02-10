@@ -59,6 +59,16 @@ def everything_deterministic():
     torch.use_deterministic_algorithms(mode=True)
 
 
+def to_device(batch, device="cuda"):
+    new_batch = {}
+    for k, v in batch.items():
+        if isinstance(v, torch.Tensor):
+            new_batch[k] = v.to(device)
+        else:
+            new_batch[k] = v
+    return new_batch
+
+
 def repo_root():
     """
     Returns the absolute path to the git repository
