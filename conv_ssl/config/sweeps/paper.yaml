@@ -1,0 +1,25 @@
+program: conv_ssl/train_disk.py
+project: ULMProjection
+description: Train directly on encoder output (no AR)
+method: grid
+metric:
+  name: val_loss
+  goal: minimize
+parameters:
+  encoder.type: 
+     values: [cpc]
+  ar.num_layers:
+    values: [1, 2, 4]
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - "--gpus"
+  - "-1"
+  - "--patience"
+  - "50"
+  - "--batch_size"
+  - "70"
+  - "--quantizer.n_codes"
+  - "0"
+  - ${args}

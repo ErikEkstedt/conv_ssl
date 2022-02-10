@@ -4,7 +4,8 @@ encoder:
   sample_rate: 16000
   type: cpc
   target_frame_hz: 0
-  downsample: mean # maxpool, cnn
+  downsample: null # mean, maxpool, cnn
+  features: null
 
 quantizer:
   type: kmeans # VQ

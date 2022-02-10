@@ -70,13 +70,40 @@ ConvSSL
 The pretrained encoder checkpoints are downloaded from the original repos (see tree-structure above for paths)
 or from torch.hub through torchaudio.
 
-* [WavLM-Base & WavLM-Base+](https://github.com/microsoft/unilm/tree/master/wavlm)
-  - download the checkpoints
 * [CPC](https://github.com/facebookresearch/CPC_audio)
   - requires installation of source
   - that is clone [CPC_audio](https://github.com/facebookresearch/CPC_audio), cd to repo, run `python setup.py develop`
   - **automatically** downloads checkpoints
-* [Hubert & Wav2vec2](https://pytorch.org/audio/stable/models.html#wav2vec2-0-hubert) are downloaded through `torchaudio` (downloads to `~/.cache/torch/hub/checkpoints/` by default)
+* Unused
+  * [WavLM-Base & WavLM-Base+](https://github.com/microsoft/unilm/tree/master/wavlm)
+    - download the checkpoints
+  * [Hubert & Wav2vec2](https://pytorch.org/audio/stable/models.html#wav2vec2-0-hubert) are downloaded through `torchaudio` (downloads to `~/.cache/torch/hub/checkpoints/` by default)
+  * [Wav2vec, vq-wav2vec]()
+
+
+
+## Experiments
+
+
+Default
+
+```bash
+python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model.yaml
+```
+
+Regression with bins like default
+```bash
+python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_regression.yaml
+```
+
+Regression with bins like [Skantze]()
+
+```bash
+python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_regression_baseline.yaml
+```
+
+
+## UNUSED
 
 ```python
 from torchaudio.pipelines import HUBERT_BASE, WAV2VEC2_BASE

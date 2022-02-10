@@ -2,9 +2,10 @@ encoder:
   pretrained: true
   output_layer: 1
   sample_rate: 16000
-  type: wav2vec
+  type: cpc
   target_frame_hz: 0
-  downsample: mean # maxpool, cnn
+  downsample: null # mean, maxpool, cnn
+  features: null
 
 quantizer:
   type: kmeans # VQ
@@ -13,7 +14,7 @@ quantizer:
 
 ulm:
   type: 'transformer'
-  dim: 512
+  dim: 256
   num_layers: 0
   num_heads: 4
   use_pos_emb: 1
@@ -24,7 +25,7 @@ ulm:
 
 ar:
   type: 'transformer'
-  dim: 512
+  dim: 256
   num_layers: 1
   num_heads: 4
   use_pos_emb: 1
