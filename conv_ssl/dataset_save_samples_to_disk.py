@@ -63,7 +63,7 @@ if __name__ == "__main__":
                 "dset_name": batch["dset_name"][i],
                 "session": batch["session"][i],
             }
-            torch.save(sample, join(args.dirpath, "train", f"d_{str(n).zfill(5)}.pt"))
+            torch.save(sample, join(args.dirpath, "train", f"d_{str(n).zfill(6)}.pt"))
             n += 1
 
     ################################################################
@@ -72,9 +72,9 @@ if __name__ == "__main__":
     makedirs(join(args.dirpath, split), exist_ok=True)
 
     if args.max_batches > 0:
-        pbar = tqdm(dm.train_dataloader(), total=args.max_batches)
+        pbar = tqdm(dm.val_dataloader(), total=args.max_batches)
     else:
-        pbar = tqdm(dm.train_dataloader())
+        pbar = tqdm(dm.val_dataloader())
     n = 0
     for n_batch, batch in enumerate(pbar):
         batch_size = batch["waveform"].shape[0]
@@ -88,5 +88,5 @@ if __name__ == "__main__":
                 "dset_name": batch["dset_name"][i],
                 "session": batch["session"][i],
             }
-            torch.save(sample, join(args.dirpath, split, f"d_{str(n).zfill(5)}.pt"))
+            torch.save(sample, join(args.dirpath, split, f"d_{str(n).zfill(6)}.pt"))
             n += 1
