@@ -239,6 +239,7 @@ class VPModel(pl.LightningModule):
 
         # only use discrete codes if necessary
         self.regression = conf["vad_projection"]["regression"]
+        self.pre_frames = conf["vad_projection"]["regression_pre_frames"]
         if not self.regression:
             self.projection_codebook = ProjectionCodebook(
                 bin_times=conf["vad_projection"]["bin_times"],
@@ -289,17 +290,23 @@ class VPModel(pl.LightningModule):
             weight_decay=self.weight_decay,
         )
 
+    def _normalize_reg_probs(self, probs):
+        probs = probs.sum(dim=-1)
+        tot = probs.sum(dim=-1)
+        # renormalize for comparison
+        probs[..., 0] = probs[..., 0] / tot
+        probs[..., 1] = probs[..., 1] / tot
+        return probs
+
     def get_next_speaker_probs(self, logits, vad=None):
+        pre_probs = None
         if self.regression:
             probs = logits.sigmoid()
-            next_probs = probs.mean(dim=-1)
-            tot = next_probs.sum(dim=-1)
-            # renormalize for comparison
-            next_probs[..., 0] = next_probs[..., 0] / tot
-            next_probs[..., 1] = next_probs[..., 1] / tot
+            pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
+            next_probs = self._normalize_reg_probs(probs)
         else:
             next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
-        return next_probs
+        return next_probs, pre_probs
 
     def forward(self, *args, **kwargs):
         return self.net(*args, **kwargs)
@@ -409,8 +416,10 @@ class VPModel(pl.LightningModule):
         if "loss_ar" in loss:
             self.log("val_loss_ar", loss["ar"], batch_size=batch_size)
 
-        next_probs = self.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
-        self.val_metric.update(next_probs, vad=batch["vad"])
+        next_probs, pre_probs = self.get_next_speaker_probs(
+            out["logits_vp"], vad=batch["vad"]
+        )
+        self.val_metric.update(next_probs, vad=batch["vad"], bc_pre_probs=pre_probs)
 
     def validation_epoch_end(self, outputs) -> None:
         r = self.val_metric.compute()
@@ -439,8 +448,10 @@ class VPModel(pl.LightningModule):
         if self.test_metric is None:
             self.test_metric = ShiftHoldMetric()
 
-        next_probs = self.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
-        self.test_metric.update(next_probs, vad=batch["vad"])
+        next_probs, pre_probs = self.get_next_speaker_probs(
+            out["logits_vp"], vad=batch["vad"]
+        )
+        self.test_metric.update(next_probs, vad=batch["vad"], bc_pre_probs=pre_probs)
 
     def test_epoch_end(self, outputs) -> None:
         r = self.test_metric.compute()

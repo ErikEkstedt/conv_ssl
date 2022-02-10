@@ -345,35 +345,56 @@ if __name__ == "__main__":
     # TODO: load artifact from wandb
 
     checkpoints = [
-        "checkpoints/cpc/cpc_04_14.ckpt",
-        "checkpoints/cpc/cpc_04_24.ckpt",
-        "checkpoints/cpc/cpc_04_44.ckpt",
+        # "checkpoints/cpc/cpc_04_14.ckpt",
+        # "checkpoints/cpc/cpc_04_24.ckpt",
+        # "checkpoints/cpc/cpc_04_44.ckpt",
+        "checkpoints/cpc/cpc_04_14_reg.ckpt",
     ]
     # chpt = "checkpoints/cpc/cpc_04_14.ckpt"
     # chpt = "checkpoints/cpc/cpc_04_24.ckpt"
-    # chpt = "checkpoints/cpc/cpc_04_44.ckpt"
 
     results = {}
     for chpt in checkpoints:
         model = VPModel.load_from_checkpoint(chpt)
         model = model.to("cuda")
         dm = load_dm(model, test=True)
-        trainer = Trainer(gpus=-1, limit_test_batches=20, deterministic=True)
+        # trainer = Trainer(gpus=-1, limit_test_batches=20, deterministic=True)
+        trainer = Trainer(gpus=-1, deterministic=True)
         result = trainer.test(model, dataloaders=dm.test_dataloader(), verbose=False)
         name = basename(chpt)
         results[name] = result[0]
-    torch.save(results, "evaluation_scores.pt")
 
+    torch.save(results, "evaluation_reg_scores.pt")
+    # torch.save(results, "evaluation_scores.pt")
+    # r = torch.load("evaluation_scores.pt")
+
+    r = torch.load("evaluation_reg_scores.pt")
+
+    # #######################################################
+    # chpt = "checkpoints/cpc/cpc_04_14_reg.ckpt"
+    # model = VPModel.load_from_checkpoint(chpt)
+    # model = model.to("cuda")
     # model.eval()
+    # dm = load_dm(model, test=False)
+    # diter = iter(dm.val_dataloader())
+    #
+    # trainer = Trainer(gpus=-1, limit_test_batches=50, deterministic=True)
+    # result = trainer.test(model, dataloaders=dm.val_dataloader(), verbose=False)
+    # print(result[0])
+
     # print(model.val_metric)
     # batch = next(diter)
     # batch = to_device(batch, model.device)
     # model.val_metric.reset()
     # with torch.no_grad():
     #     loss, out, batch = model.shared_step(batch)
-    #     next_probs = model.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
+    #     next_probs, pre_probs = model.get_next_speaker_probs(
+    #         out["logits_vp"], vad=batch["vad"]
+    #     )
     #     events = model.val_metric.extract_events(batch["vad"])
-    #     model.val_metric.update(next_probs, vad=batch["vad"], events=events)
+    #     model.val_metric.update(
+    #         next_probs, vad=batch["vad"], events=events, bc_pre_probs=pre_probs
+    #     )
     #     r = model.val_metric.compute()
     #
     # b = 0
