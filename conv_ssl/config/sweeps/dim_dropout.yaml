@@ -1,0 +1,27 @@
+program: conv_ssl/train_disk.py
+project: ULMProjection
+description: Train directly on encoder output (no AR)
+method: grid
+metric:
+  name: val_f1_loss
+  goal: maximize
+parameters:
+  conf:
+    values: ["conv_ssl/config/model.yaml", "conv_ssl/config/model_regression.yaml"]
+  ar.dim:
+    values: [32, 64, 128]
+  ar.dropout:
+    values: [0.2, 0.4, 0.6]
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - "--gpus"
+  - "-1"
+  - "--batch_size"
+  - "50"
+  - "--limit_train_batches"
+  - "1000"
+  - "--limit_val_batches"
+  - "200"
+  - ${args}
