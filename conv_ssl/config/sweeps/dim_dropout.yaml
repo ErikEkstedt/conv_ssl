@@ -1,9 +1,9 @@
 program: conv_ssl/train_disk.py
-project: ULMProjection
+project: VPModel
 description: Train directly on encoder output (no AR)
 method: grid
 metric:
-  name: val_f1_loss
+  name: val_f1_weighted
   goal: maximize
 parameters:
   conf:
@@ -24,4 +24,6 @@ command:
   - "1000"
   - "--limit_val_batches"
   - "200"
+  - "--max_epochs"
+  - "30"
   - ${args}
