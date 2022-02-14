@@ -349,6 +349,8 @@ if __name__ == "__main__":
         # "checkpoints/cpc/cpc_04_24.ckpt",
         # "checkpoints/cpc/cpc_04_44.ckpt",
         "checkpoints/cpc/cpc_04_14_reg.ckpt",
+        "checkpoints/cpc/cpc_04_24_reg.ckpt",
+        "checkpoints/cpc/cpc_04_44_reg.ckpt",
     ]
     # chpt = "checkpoints/cpc/cpc_04_14.ckpt"
     # chpt = "checkpoints/cpc/cpc_04_24.ckpt"
@@ -363,7 +365,6 @@ if __name__ == "__main__":
         result = trainer.test(model, dataloaders=dm.test_dataloader(), verbose=False)
         name = basename(chpt)
         results[name] = result[0]
-
     torch.save(results, "evaluation_reg_scores.pt")
     # torch.save(results, "evaluation_scores.pt")
     # r = torch.load("evaluation_scores.pt")
@@ -371,53 +372,140 @@ if __name__ == "__main__":
     r = torch.load("evaluation_reg_scores.pt")
 
     # #######################################################
-    # chpt = "checkpoints/cpc/cpc_04_14_reg.ckpt"
-    # model = VPModel.load_from_checkpoint(chpt)
-    # model = model.to("cuda")
-    # model.eval()
-    # dm = load_dm(model, test=False)
-    # diter = iter(dm.val_dataloader())
-    #
+    chpt = "checkpoints/cpc/cpc_04_44_reg.ckpt"
+    chpt = "checkpoints/cpc/cpc_04_44.ckpt"
+    model = VPModel.load_from_checkpoint(chpt)
+    model = model.to("cuda")
+    model.eval()
+    dm = load_dm(model, test=False)
+    diter = iter(dm.val_dataloader())
+
     # trainer = Trainer(gpus=-1, limit_test_batches=50, deterministic=True)
     # result = trainer.test(model, dataloaders=dm.val_dataloader(), verbose=False)
     # print(result[0])
 
-    # print(model.val_metric)
-    # batch = next(diter)
-    # batch = to_device(batch, model.device)
-    # model.val_metric.reset()
-    # with torch.no_grad():
-    #     loss, out, batch = model.shared_step(batch)
-    #     next_probs, pre_probs = model.get_next_speaker_probs(
-    #         out["logits_vp"], vad=batch["vad"]
-    #     )
-    #     events = model.val_metric.extract_events(batch["vad"])
-    #     model.val_metric.update(
-    #         next_probs, vad=batch["vad"], events=events, bc_pre_probs=pre_probs
-    #     )
-    #     r = model.val_metric.compute()
-    #
-    # b = 0
-    # fig, ax = plot_window(
-    #     next_probs[b].cpu(),
-    #     vad=batch["vad"][b].cpu(),
-    #     hold=events["hold"][b].cpu(),
-    #     shift=events["shift"][b].cpu(),
-    #     pre_hold=events["pre_hold"][b].cpu(),
-    #     pre_shift=events["pre_shift"][b].cpu(),
-    #     backchannels=events["backchannels"][b].cpu(),
-    #     plot_kwargs=dict(
-    #         alpha_event=0.2,
-    #         alpha_vad=0.6,
-    #         shift_hatch=".",
-    #         shift_pre_hatch=".",
-    #         hold_hatch="/",
-    #         hold_pre_hatch="/",
-    #         bc_hatch="x",
-    #         alpha_bc=0.2,
-    #         linewidth=2,
-    #     ),
-    #     plot=False,
-    # )
-    #
-    # plt.show()
+    print(model.val_metric)
+    batch = next(diter)
+    batch = to_device(batch, model.device)
+    model.val_metric.reset()
+    with torch.no_grad():
+        loss, out, batch = model.shared_step(batch)
+        next_probs, pre_probs = model.get_next_speaker_probs(
+            out["logits_vp"], vad=batch["vad"]
+        )
+        events = model.val_metric.extract_events(batch["vad"])
+        model.val_metric.update(
+            next_probs, vad=batch["vad"], events=events, bc_pre_probs=pre_probs
+        )
+        r = model.val_metric.compute()
+        if model.regression:
+            p = out["logits_vp"].sigmoid().cpu()
+        else:
+            p = out["logits_vp"].topk(dim=-1, k=3).indices
+            p = p.permute(2, 0, 1)
+            p = model.projection_codebook.idx_to_onehot(p).cpu()
+
+    def plot_regression_prediction(
+        p,
+        step,
+        ax,
+        bin_times=[0.2, 0.4, 0.6, 0.8],
+        lw=2,
+        ls=None,
+        current=True,
+        fill=False,
+    ):
+        """
+        regression prediction lines
+        """
+        # add zero at start to include values from prediction step
+        x = torch.tensor([0] + bin_times).cumsum(dim=0)
+        x += step
+        # tmax = x[-1]
+
+        # replicate first bin to match x
+        ap = p[step, 0]
+        ap = torch.cat((ap[:1], ap))
+
+        # replicate first bin to match x
+        bp = p[step, 1] - 1
+        bp = torch.cat((bp[:1], bp))
+
+        ret = {}
+        if current:
+            ret["current"] = ax.vlines(step, ymin=-1, ymax=1, color="r", linewidth=3)
+        ret["a_pred"] = ax.step(
+            x, ap, where="pre", linewidth=lw, linestyle=ls, color="b"
+        )[0]
+        ret["b_pred"] = ax.step(
+            x, bp, where="pre", linewidth=lw, linestyle=ls, color="orange"
+        )[0]
+        return ret
+
+    b = 0
+    fig, ax = plot_window(
+        next_probs[b].cpu(),
+        vad=batch["vad"][b].cpu(),
+        hold=events["hold"][b].cpu(),
+        shift=events["shift"][b].cpu(),
+        pre_hold=events["pre_hold"][b].cpu(),
+        pre_shift=events["pre_shift"][b].cpu(),
+        backchannels=events["backchannels"][b].cpu(),
+        plot_kwargs=dict(
+            alpha_event=0.1,
+            alpha_vad=0.1,
+            alpha_probs=0.1,
+            shift_hatch=".",
+            shift_pre_hatch=".",
+            hold_hatch="/",
+            hold_pre_hatch="/",
+            bc_hatch="x",
+            alpha_bc=0.1,
+            linewidth=2,
+        ),
+        plot=False,
+    )
+    if model.regression:
+        for step in range(0, 1000):
+            lines = plot_regression_prediction(
+                p[b], step=step, ax=ax[0], bin_times=[20, 40, 60, 80], lw=2
+            )
+            plt.pause(0.01)
+            lines["current"].remove()
+            lines["a_pred"].remove()
+            lines["b_pred"].remove()
+    else:
+        for step in range(0, 1000):
+            all_lines = []
+            for k, ls in zip(range(3), ["solid", "dashed", "dotted"]):
+                lines = plot_regression_prediction(
+                    p[k, b],
+                    step=step,
+                    ax=ax[0],
+                    bin_times=[20, 40, 60, 80],
+                    lw=2,
+                    ls=ls,
+                    current=k == 0,
+                )
+                all_lines.append(lines)
+            plt.pause(0.01)
+            for lines in all_lines:
+                if "current" in lines:
+                    lines["current"].remove()
+                lines["a_pred"].remove()
+                lines["b_pred"].remove()
+
+    plt.close("all")
+
+    lines["current"]
+
+    plt.pause(0.1)
+
+    step = 400
+    fig2, ax2 = plt.subplots(1, 1)
+    ax2 = plot_regression_prediction(
+        p[b], step=step, ax=ax2, bin_times=[20, 40, 60, 80]
+    )
+    plt.pause(0.1)
+
+    plt.show()

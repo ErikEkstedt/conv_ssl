@@ -98,9 +98,11 @@ def forward_pass():
     model.val_metric.reset()
     with torch.no_grad():
         _, out, batch = model.shared_step(batch)
-        probs = model.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
+        probs, pre_probs = model.get_next_speaker_probs(
+            out["logits_vp"], vad=batch["vad"]
+        )
         events = model.val_metric.extract_events(batch["vad"])
-        model.val_metric.update(probs, None, events=events)
+        model.val_metric.update(probs, None, events=events, bc_pre_probs=pre_probs)
         result = model.val_metric.compute()
 
     st.session_state.result = result
