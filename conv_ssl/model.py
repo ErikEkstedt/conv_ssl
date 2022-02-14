@@ -78,11 +78,14 @@ class ProjectionModel(nn.Module):
         # VAD Projection
         # self.vad_projection = nn.Linear(input_dim, conf["vad_projection"])
         if conf["vad_projection"]["regression"]:
-            cf = len(conf["vad_projection"]["bin_times"]) * 2
-            self.projection_head = nn.Sequential(
-                nn.Linear(input_dim, cf),
-                Rearrange("... (c f) -> ... c f", c=2, f=cf // 2),
-            )
+            if conf["vad_projection"]["comparative"]:
+                self.projection_head = nn.Linear(input_dim, 1)
+            else:
+                cf = len(conf["vad_projection"]["bin_times"]) * 2
+                self.projection_head = nn.Sequential(
+                    nn.Linear(input_dim, cf),
+                    Rearrange("... (c f) -> ... c f", c=2, f=cf // 2),
+                )
         else:
             total_bins = 2 * len(conf["vad_projection"]["bin_times"])
             self.n_classes = 2 ** total_bins
@@ -302,8 +305,11 @@ class VPModel(pl.LightningModule):
         pre_probs = None
         if self.regression:
             probs = logits.sigmoid()
-            pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
-            next_probs = self._normalize_reg_probs(probs)
+            if self.conf["vad_projection"]["comparative"]:
+                next_probs = torch.cat((probs, 1 - probs), dim=-1)
+            else:
+                pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
+                next_probs = self._normalize_reg_probs(probs)
         else:
             next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
         return next_probs, pre_probs
@@ -316,18 +322,23 @@ class VPModel(pl.LightningModule):
 
         # Vad Projection Loss
         if self.conf["vad_projection"]["regression"]:
-            if self.conf["vad_projection"]["regression_loss"] == "mse":
-                loss["vp"] = F.mse_loss(
-                    out["logits_vp"].sigmoid(), vad_projection_window
-                )
-            elif self.conf["vad_projection"]["regression_loss"] in ["mae", "l1"]:
-                loss["vp"] = F.l1_loss(
-                    out["logits_vp"].sigmoid(), vad_projection_window
+            if self.conf["vad_projection"]["comparative"]:
+                loss["vp"] = F.binary_cross_entropy_with_logits(
+                    out["logits_vp"], vad_projection_window.unsqueeze(-1)
                 )
             else:
-                loss["vp"] = F.binary_cross_entropy_with_logits(
-                    out["logits_vp"], vad_projection_window
-                )
+                if self.conf["vad_projection"]["regression_loss"] == "mse":
+                    loss["vp"] = F.mse_loss(
+                        out["logits_vp"].sigmoid(), vad_projection_window
+                    )
+                elif self.conf["vad_projection"]["regression_loss"] in ["mae", "l1"]:
+                    loss["vp"] = F.l1_loss(
+                        out["logits_vp"].sigmoid(), vad_projection_window
+                    )
+                else:  # BCE
+                    loss["vp"] = F.binary_cross_entropy_with_logits(
+                        out["logits_vp"], vad_projection_window
+                    )
         else:
             # Vad Projection Loss
             vad_labels = self.projection_codebook(vad_projection_window)
@@ -363,7 +374,15 @@ class VPModel(pl.LightningModule):
             batch:      same as input arguments (fixed for differenct encoder Hz)
         """
         # Extract labels (using horizon which spans beyond the sample)
-        vad_projection_window = self.vad_label_maker.vad_projection(batch["vad"])
+        if (
+            "comparative" in self.conf["vad_projection"]
+            and self.conf["vad_projection"]["comparative"]
+        ):  # scalar value
+            vad_projection_window = self.vad_label_maker.comparative_activity(
+                batch["vad"]
+            )
+        else:  # onehot window projection
+            vad_projection_window = self.vad_label_maker.vad_projection(batch["vad"])
 
         # Only keep the relevant vad information
         n_valid = vad_projection_window.shape[1]
@@ -494,21 +513,23 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser = DialogAudioDM.add_data_specific_args(parser)
-    # parser = VPModel.add_model_specific_args(parser)
     args = parser.parse_args()
     data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
-    # data_conf["dataset"]["type"] = "sliding"
     DialogAudioDM.print_dm(data_conf, args)
 
     # Model
     conf = VPModel.load_config()
-    conf["vad_projection"]["regression"] = False
-    conf["vad_projection"][
-        "regression_loss"
-    ] = "bce"  # 'mae', 'l1', 'mse' otherwise 'bce'
+    # conf["vad_projection"]["regression"] = False
+    # conf["vad_projection"]["regression"] = True
+    # conf["vad_projection"]["comparative"] = True
+    # conf["vad_projection"]["bin_times"] = [0.05] * 40
+    # conf["vad_projection"][
+    #     "regression_loss"
+    # ] = "bce"  # 'mae', 'l1', 'mse' otherwise 'bce'
     model = VPModel(conf)
     n_params = count_parameters(model)
     print(f"Parameters: {n_params}")
+
     cuda = True
     if cuda:
         model = model.to("cuda")
@@ -524,7 +545,7 @@ if __name__ == "__main__":
         ipu_min_time=data_conf["dataset"]["ipu_min_time"],
         ipu_pause_time=data_conf["dataset"]["ipu_pause_time"],
         vad_hz=model.frame_hz,
-        vad_bin_times=data_conf["dataset"]["vad_bin_times"],
+        vad_horizon=sum(model.conf["vad_projection"]["bin_times"]),
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
         batch_size=4,
@@ -532,6 +553,7 @@ if __name__ == "__main__":
     )
     dm.prepare_data()
     dm.setup()
+    print(dm)
     diter = iter(dm.val_dataloader())
 
     batch = next(diter)
@@ -539,4 +561,5 @@ if __name__ == "__main__":
         for k, v in batch.items():
             if isinstance(v, torch.Tensor):
                 batch[k] = v.to("cuda")
+
     loss, out, batch = model.shared_step(batch)

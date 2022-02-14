@@ -41,11 +41,11 @@ vad_cond:
   vad_history_bins: 5
 
 vad_projection:
-  bin_times: [.2, .4, .6, .8]
+  bin_times: [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
   regression: true
   regression_loss: bce # mse, mae, l1 (same as mae)
-  regression_pre_frames: 2
-  comparative: false
+  regression_pre_frames: 0
+  comparative: true
   vad_threshold: 0.5
   pred_threshold: 0.5
   event_min_context: 1.0

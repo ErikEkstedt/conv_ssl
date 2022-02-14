@@ -64,9 +64,10 @@ def load_dataset(model):
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
         vad_hz=model.frame_hz,
-        vad_bin_times=model.conf["vad_projection"]["bin_times"],
+        vad_horizon=sum(model.conf["vad_projection"]["bin_times"]),
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
+        flip_channels=False,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
     )
@@ -98,9 +99,11 @@ def forward_pass():
     model.val_metric.reset()
     with torch.no_grad():
         _, out, batch = model.shared_step(batch)
-        probs = model.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
+        probs, pre_probs = model.get_next_speaker_probs(
+            out["logits_vp"], vad=batch["vad"]
+        )
         events = model.val_metric.extract_events(batch["vad"])
-        model.val_metric.update(probs, None, events=events)
+        model.val_metric.update(probs, None, events=events, bc_pre_probs=pre_probs)
         result = model.val_metric.compute()
 
     st.session_state.result = result

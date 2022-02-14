@@ -527,6 +527,7 @@ def plot_window(
     plot_kwargs=dict(
         alpha_event=0.2,
         alpha_vad=0.6,
+        alpha_probs=1.0,
         shift_hatch=".",
         shift_pre_hatch=".",
         hold_hatch="/",
@@ -670,8 +671,20 @@ def plot_window(
     pb[wb] = probs[:, 1][wb]
     pb[wa] = np.nan
 
-    axes.plot(pa, color="b", linewidth=plot_kwargs["linewidth"], label="A is next")
-    axes.plot(pb, color="orange", linewidth=plot_kwargs["linewidth"], label="B is next")
+    axes.plot(
+        pa,
+        color="b",
+        linewidth=plot_kwargs["linewidth"],
+        label="A is next",
+        alpha=plot_kwargs["alpha_probs"],
+    )
+    axes.plot(
+        pb,
+        color="orange",
+        linewidth=plot_kwargs["linewidth"],
+        label="B is next",
+        alpha=plot_kwargs["alpha_probs"],
+    )
     axes.set_ylim([-0.05, 1.05])
     axes.set_yticks([])
 

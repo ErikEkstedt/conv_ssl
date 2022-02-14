@@ -45,6 +45,7 @@ vad_projection:
   regression: false
   regression_loss: bce # mse, mae, l1 (same as mae)
   regression_pre_frames: 0
+  comparative: false
   vad_threshold: 0.5
   pred_threshold: 0.5
   event_min_context: 1.0

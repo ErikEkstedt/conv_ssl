@@ -81,7 +81,7 @@ def train():
     data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
     # Update the data to match MODEL Frame rate (Hz)
     data_conf["dataset"]["vad_hz"] = model.frame_hz
-    data_conf["dataset"]["vad_bin_times"] = conf["vad_projection"]["bin_times"]
+    data_conf["dataset"]["vad_horizon"] = sum(conf["vad_projection"]["bin_times"])
     if local_rank == 0:
         DialogAudioDM.print_dm(data_conf, args)
 
@@ -93,7 +93,7 @@ def train():
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
         vad_hz=data_conf["dataset"]["vad_hz"],
-        vad_bin_times=data_conf["dataset"]["vad_bin_times"],
+        vad_horizon=data_conf["dataset"]["vad_horizon"],
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
         batch_size=args.batch_size,
