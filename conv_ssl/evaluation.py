@@ -165,7 +165,7 @@ def load_dm(model, test=False, vad_history=None, batch_size=4, num_workers=4):
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
         vad_hz=model.frame_hz,
-        vad_bin_times=model.conf["vad_projection"]["bin_times"],
+        vad_horizon=sum(model.conf["vad_projection"]["bin_times"]),
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
         batch_size=batch_size,
@@ -390,6 +390,10 @@ if __name__ == "__main__":
     model.val_metric.reset()
     with torch.no_grad():
         loss, out, batch = model.shared_step(batch)
+        # probs = out['logits_vp'].softmax(dim=-1).view(-1, 256)
+        # p_log_p = probs*probs.log()
+        # ent = -p_log_p.sum(-1)
+
         next_probs, pre_probs = model.get_next_speaker_probs(
             out["logits_vp"], vad=batch["vad"]
         )
