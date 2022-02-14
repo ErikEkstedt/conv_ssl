@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
@@ -14,6 +15,8 @@ def extract_statistics(
     bc_pre_silence=150,
     bc_post_silence=300,
     bc_max_active=100,
+    VL=None,
+    PC=None,
     total=None,
 ):
     stats = {
@@ -21,6 +24,9 @@ def extract_statistics(
         "shift": {"n": 0, "duration": []},
         "bc": {"n": 0, "duration": []},
     }
+
+    if PC is not None:
+        stats["discrete"] = torch.zeros((PC.n_classes))
 
     if total is None:
         total = len(dloader)
@@ -43,6 +49,16 @@ def extract_statistics(
             post_silence_frames=bc_post_silence,
             max_active_frames=bc_max_active,
         )
+
+        if VL is not None:
+            vad_projection_window = VL.vad_projection(batch["vad"])
+            discrete_labels = PC(vad_projection_window)
+            # -> onehot
+            discrete_labels = F.one_hot(discrete_labels, num_classes=PC.n_classes).view(
+                -1, PC.n_classes
+            )
+            discrete_labels = discrete_labels.sum(dim=0)  # sum over all labels
+            stats["discrete"] += discrete_labels
 
         for b in range(batch_size):
             for speaker in [0, 1]:
@@ -82,14 +98,14 @@ def plot_hold_shift_histogram(stats, plot=False):
         stats["shift"]["duration"],
         color="g",
         label=f'Shift ({stats["shift"]["n"]})',
-        alpha=0.6,
+        alpha=1.0,
         bins=bins,
     )
     c = ax.hist(
         stats["bc"]["duration"],
         color="k",
         label=f'bc ({stats["bc"]["n"]})',
-        alpha=0.8,
+        alpha=1.0,
         bins=bins,
     )
     ax.legend(loc="upper right")
@@ -114,14 +130,64 @@ if __name__ == "__main__":
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
         vad_hz=frame_hz,
-        vad_bin_times=bin_times,
+        vad_horizon=sum(bin_times),
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
+        flip_channels=False,
         batch_size=batch_size,
         num_workers=num_workers,
     )
     dm.prepare_data()
     dm.setup()
+
+    VL = VadLabel(bin_times=bin_times, vad_hz=frame_hz, threshold_ratio=0.5)
+    PC = ProjectionCodebook(bin_times=bin_times, frame_hz=frame_hz)
+
+    stats = extract_statistics(dm.val_dataloader(), VL=VL, PC=PC)
+
+    q_prior = stats["discrete"] / stats["discrete"].sum()
+
+    # silence
+    A_next = PC.on_silent_shift[0]
+    B_next = PC.on_silent_shift[1]
+    AN = q_prior[A_next].sum()
+    BN = q_prior[B_next].sum()
+    AB_other = 1 - AN - BN
+    qq = torch.tensor([AN, BN, AB_other])
+    p_log_p = qq * qq.log()
+    ent = -p_log_p.sum(dim=-1)
+    print("qq: ", qq)
+    print("ent: ", ent)
+    # active
+    A_anext = PC.on_active_shift[0]
+    B_anext = PC.on_active_shift[1]
+    AAN = q_prior[A_anext].sum()
+    BBN = q_prior[B_anext].sum()
+    AABB_other = 1 - AAN - BBN
+    qq2 = torch.tensor([AAN, BBN, AABB_other])
+    p_log_p2 = qq2 * qq2.log()
+    ent2 = -p_log_p2.sum(dim=-1)
+    print("qq2: ", qq2)
+    print("ent2: ", ent2)
+
+    N = 256
+    d, idx = q_prior.sort(descending=True)
+    fig, ax = plt.subplots(1, 1, figsize=(12, 4))
+    ax.bar(torch.arange(len(d[:N])), d[:N])
+    ax.bar(A_next, d[A_next], color="red")
+    ax.bar(B_next, d[B_next], color="orange")
+    ax.hlines(y=1 / 256, xmin=0, xmax=N)
+    ax.set_yscale("log")
+    # ax.set_xticks(list(range(len(d[:N]))))
+    # ax.set_xticklabels(idx[:N].tolist(), fontsize=8, rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+    from torch.distributions import Categorical
+
+    qd = Categorical(probs=d)
+    uni_ent = Categorical(probs=torch.ones(256) / 256).entropy()
+    ent = qd.entropy()
 
     # stats = extract_statistics(dm.val_dataloader())
     # torch.save(stats, "val_stats.pt")
