@@ -517,12 +517,12 @@ if __name__ == "__main__":
     # Model
     conf = VPModel.load_config()
     # conf["vad_projection"]["regression"] = False
-    conf["vad_projection"]["regression"] = True
-    conf["vad_projection"]["comparative"] = True
-    conf["vad_projection"]["bin_times"] = [0.05] * 40
-    conf["vad_projection"][
-        "regression_loss"
-    ] = "bce"  # 'mae', 'l1', 'mse' otherwise 'bce'
+    # conf["vad_projection"]["regression"] = True
+    # conf["vad_projection"]["comparative"] = True
+    # conf["vad_projection"]["bin_times"] = [0.05] * 40
+    # conf["vad_projection"][
+    #     "regression_loss"
+    # ] = "bce"  # 'mae', 'l1', 'mse' otherwise 'bce'
     model = VPModel(conf)
     n_params = count_parameters(model)
     print(f"Parameters: {n_params}")
@@ -542,7 +542,7 @@ if __name__ == "__main__":
         ipu_min_time=data_conf["dataset"]["ipu_min_time"],
         ipu_pause_time=data_conf["dataset"]["ipu_pause_time"],
         vad_hz=model.frame_hz,
-        vad_bin_times=data_conf["dataset"]["vad_bin_times"],
+        vad_horizon=sum(model.conf["vad_projection"]["bin_times"]),
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
         batch_size=4,
@@ -550,6 +550,7 @@ if __name__ == "__main__":
     )
     dm.prepare_data()
     dm.setup()
+    print(dm)
     diter = iter(dm.val_dataloader())
 
     batch = next(diter)
@@ -557,4 +558,5 @@ if __name__ == "__main__":
         for k, v in batch.items():
             if isinstance(v, torch.Tensor):
                 batch[k] = v.to("cuda")
+
     loss, out, batch = model.shared_step(batch)
