@@ -374,7 +374,10 @@ class VPModel(pl.LightningModule):
             batch:      same as input arguments (fixed for differenct encoder Hz)
         """
         # Extract labels (using horizon which spans beyond the sample)
-        if self.conf["vad_projection"]["comparative"]:  # scalar value
+        if (
+            "comparative" in self.conf["vad_projection"]
+            and self.conf["vad_projection"]["comparative"]
+        ):  # scalar value
             vad_projection_window = self.vad_label_maker.comparative_activity(
                 batch["vad"]
             )
