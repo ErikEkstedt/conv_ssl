@@ -260,6 +260,9 @@ class VPModel(pl.LightningModule):
         self.weight_decay = conf["optimizer"]["weight_decay"]
         self.save_hyperparameters()
 
+    def forward(self, *args, **kwargs):
+        return self.net(*args, **kwargs)
+
     def summary(self):
         s = "VPModel\n"
         s += "Encoder\n"
@@ -295,10 +298,9 @@ class VPModel(pl.LightningModule):
 
     def _normalize_reg_probs(self, probs):
         probs = probs.sum(dim=-1)
-        tot = probs.sum(dim=-1)
+        tot = probs.sum(dim=-1, keepdim=True)
         # renormalize for comparison
-        probs[..., 0] = probs[..., 0] / tot
-        probs[..., 1] = probs[..., 1] / tot
+        probs = probs / tot
         return probs
 
     def get_next_speaker_probs(self, logits, vad=None):
@@ -308,14 +310,11 @@ class VPModel(pl.LightningModule):
             if self.conf["vad_projection"]["comparative"]:
                 next_probs = torch.cat((probs, 1 - probs), dim=-1)
             else:
-                pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
                 next_probs = self._normalize_reg_probs(probs)
+                pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
         else:
             next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
         return next_probs, pre_probs
-
-    def forward(self, *args, **kwargs):
-        return self.net(*args, **kwargs)
 
     def calc_losses(self, out, vad_projection_window, input_ids=None, reduction="mean"):
         loss = {}
@@ -519,7 +518,7 @@ if __name__ == "__main__":
 
     # Model
     conf = VPModel.load_config()
-    # conf["vad_projection"]["regression"] = False
+    conf["vad_projection"]["regression"] = True
     # conf["vad_projection"]["regression"] = True
     # conf["vad_projection"]["comparative"] = True
     # conf["vad_projection"]["bin_times"] = [0.05] * 40
@@ -529,7 +528,6 @@ if __name__ == "__main__":
     model = VPModel(conf)
     n_params = count_parameters(model)
     print(f"Parameters: {n_params}")
-
     cuda = True
     if cuda:
         model = model.to("cuda")
@@ -561,5 +559,8 @@ if __name__ == "__main__":
         for k, v in batch.items():
             if isinstance(v, torch.Tensor):
                 batch[k] = v.to("cuda")
-
     loss, out, batch = model.shared_step(batch)
+    next_probs, pre_probs = model.get_next_speaker_probs(
+        out["logits_vp"], vad=batch["vad"]
+    )
+    print("next_probs: ", tuple(next_probs.shape))

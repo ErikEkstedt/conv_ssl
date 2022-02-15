@@ -9,6 +9,12 @@ WORKDIR /dependencies/datasets_turntaking
 RUN pip install -r requirements.txt
 RUN pip install -e .
 
+# vad_turn_taking
+WORKDIR /dependencies
+RUN git clone https://github.com/ErikEkstedt/vad_turn_taking.git
+WORKDIR /dependencies/vad_turn_taking
+RUN pip install -e .
+
 # conv_ssl
 WORKDIR /workspace
 COPY . .

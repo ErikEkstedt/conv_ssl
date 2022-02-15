@@ -3,3 +3,6 @@ artifacts/
 runs/
 wandb/
 dataset_units/
+lightning_logs/
+checkpoints/
+swb_dataset/

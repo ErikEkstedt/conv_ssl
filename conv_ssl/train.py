@@ -81,7 +81,11 @@ def train():
     data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
     # Update the data to match MODEL Frame rate (Hz)
     data_conf["dataset"]["vad_hz"] = model.frame_hz
-    data_conf["dataset"]["vad_horizon"] = sum(conf["vad_projection"]["bin_times"])
+
+    # rounding error ?
+    data_conf["dataset"]["vad_horizon"] = round(
+        sum(conf["vad_projection"]["bin_times"]), 2
+    )
     if local_rank == 0:
         DialogAudioDM.print_dm(data_conf, args)
 
