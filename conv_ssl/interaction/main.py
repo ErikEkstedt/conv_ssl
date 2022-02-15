@@ -64,7 +64,7 @@ def load_dataset(model):
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
         vad_hz=model.frame_hz,
-        vad_horizon=sum(model.conf["vad_projection"]["bin_times"]),
+        vad_horizon=round(sum(model.conf["vad_projection"]["bin_times"]), 2),
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
         flip_channels=False,
