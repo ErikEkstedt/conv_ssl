@@ -260,6 +260,20 @@ class VPModel(pl.LightningModule):
         self.weight_decay = conf["optimizer"]["weight_decay"]
         self.save_hyperparameters()
 
+    @property
+    def run_name(self):
+        # Name the run e.g. hubert_44_41
+        name = self.conf["encoder"]["type"].replace("_base", "")
+        name += f"_{self.conf['ulm']['num_layers']}{self.conf['ulm']['num_heads']}"
+        name += f"_{self.conf['ar']['num_layers']}{self.conf['ar']['num_heads']}"
+        if self.conf["vad_projection"]["regression"]:
+            if self.conf["vad_projection"]["comparative"]:
+                name += "_comp"
+            else:
+                n_bins = len(self.conf["vad_projection"]["bin_times"])
+                name += f"_ind_{n_bins}"
+        return name
+
     def forward(self, *args, **kwargs):
         return self.net(*args, **kwargs)
 
@@ -481,16 +495,6 @@ class VPModel(pl.LightningModule):
             else:
                 self.log(f"test/{metric_name}", values)
         self.test_metric.reset()
-
-    @property
-    def run_name(self):
-        # Name the run e.g. hubert_44_41
-        name = self.conf["encoder"]["type"].replace("_base", "")
-        name += f"_{self.conf['ulm']['num_layers']}{self.conf['ulm']['num_heads']}"
-        name += f"_{self.conf['ar']['num_layers']}{self.conf['ar']['num_heads']}"
-        if self.conf["vad_projection"]["regression"]:
-            name += "_reg"
-        return name
 
     @staticmethod
     def add_model_specific_args(parent_parser):
