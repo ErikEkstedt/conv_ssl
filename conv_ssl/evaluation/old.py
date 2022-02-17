@@ -1,88 +1,14 @@
 import math
-from os.path import basename, dirname, exists, join
 import matplotlib.pyplot as plt
+from os.path import basename, dirname, exists, join
 
 import torch
 import torch.nn.functional as F
 from pytorch_lightning import Trainer, Callback
 
-from conv_ssl.model import VPModel
+from conv_ssl.utils import to_device
 from conv_ssl.plot_utils import plot_next_speaker_probs, plot_all_labels, plot_window
-from conv_ssl.utils import everything_deterministic
-from datasets_turntaking import DialogAudioDM
-
 from vad_turn_taking import DialogEvents, ProjectionCodebook
-
-import matplotlib as mpl
-
-mpl.use("TkAgg")
-
-
-def run_path_to_project_id(run_path):
-    id = basename(run_path)  # 1xon133f
-    project = dirname(run_path)  #  how_so/ULMProjection
-    return project, id
-
-
-def run_path_to_artifact_url(run_path, version="v1"):
-    """
-    run_path: "how_so/ULMProjection/1xon133f"
-
-    artifact_url = "how_so/ULMProjection/model-1xon133f:v1"
-    """
-    project, id = run_path_to_project_id(run_path)
-
-    artifact_path = project + "/" + "model-" + id + ":" + version
-    return artifact_path
-
-
-def get_checkpoint(run_path, version="v1", artifact_dir="./artifacts"):
-    """
-    On information tab in WandB find 'Run Path' and copy to clipboard
-
-    ---------------------------------------------------------
-    run_path:       how_so/ULMProjection/1tokrds0
-    ---------------------------------------------------------
-    project:        how_so/ULMProjection
-    id:             1tokrds0
-    artifact_url:   how_so/ULMProjection/model-1xon133f:v1
-    checkpoint:     ${artifact_dir}/model-3hysqnmt:v1/model.ckpt
-    ---------------------------------------------------------
-    """
-    import wandb
-
-    # project, id = run_path_to_project_id(run_path)
-    artifact_url = run_path_to_artifact_url(run_path, version)
-    model_name = basename(artifact_url)
-    checkpoint = join(artifact_dir, model_name, "model.ckpt")
-
-    if not exists(checkpoint):
-        # URL: always '/'
-        with wandb.init() as run:
-            artifact = run.use_artifact(artifact_url, type="model")
-            _ = artifact.download()
-    return checkpoint
-
-
-def load_metadata(run_path):
-    import wandb
-
-    if not run_path.startswith("/"):
-        run_path = "/" + run_path
-
-    api = wandb.Api()
-    run = api.run(run_path)
-    return run
-
-
-def to_device(batch, device="cuda"):
-    new_batch = {}
-    for k, v in batch.items():
-        if isinstance(v, torch.Tensor):
-            new_batch[k] = v.to(device)
-        else:
-            new_batch[k] = v
-    return new_batch
 
 
 def gaussian_kernel_1d_unidirectional(N, sigma=3):
@@ -134,49 +60,6 @@ def explanation():
     print("on_active_hold: ", tuple(vad_projection.on_active_hold.shape))
     print("--------------------------------------------")
     plot_all_labels(vad_projection, next_speaker=0)
-
-
-def load_dm(model, test=False, vad_history=None, batch_size=4, num_workers=4):
-    data_conf = DialogAudioDM.load_config()
-
-    if vad_history is not None:
-        data_conf["dataset"]["vad_history"] = vad_history
-
-    # dm = DialogAudioDM(
-    #     datasets=data_conf["dataset"]["datasets"],
-    #     type=data_conf["dataset"]["type"],
-    #     audio_duration=data_conf["dataset"]["audio_duration"],
-    #     audio_normalize=data_conf["dataset"]["audio_normalize"],
-    #     audio_overlap=data_conf["dataset"]["audio_overlap"],
-    #     sample_rate=data_conf["dataset"]["sample_rate"],
-    #     vad_hz=model.frame_hz,
-    #     vad_bin_times=model.conf["vad_class_prediction"]["bin_times"],
-    #     vad_history=data_conf["dataset"]["vad_history"],
-    #     vad_history_times=data_conf["dataset"]["vad_history_times"],
-    #     batch_size=batch_size,
-    #     num_workers=num_workers,
-    # )
-
-    dm = DialogAudioDM(
-        datasets=data_conf["dataset"]["datasets"],
-        type=data_conf["dataset"]["type"],
-        audio_duration=data_conf["dataset"]["audio_duration"],
-        audio_normalize=data_conf["dataset"]["audio_normalize"],
-        audio_overlap=data_conf["dataset"]["audio_overlap"],
-        sample_rate=data_conf["dataset"]["sample_rate"],
-        vad_hz=model.frame_hz,
-        vad_horizon=sum(model.conf["vad_projection"]["bin_times"]),
-        vad_history=data_conf["dataset"]["vad_history"],
-        vad_history_times=data_conf["dataset"]["vad_history_times"],
-        batch_size=batch_size,
-        num_workers=num_workers,
-    )
-    dm.prepare_data()
-    stage = "fit"
-    if test:
-        stage = "test"
-    dm.setup(stage)
-    return dm
 
 
 def plot_batch(model, batch):
@@ -339,8 +222,7 @@ def test_causality(batch, model):
     plt.show()
 
 
-if __name__ == "__main__":
-    everything_deterministic()
+def old():
 
     # TODO: load artifact from wandb
 
@@ -366,8 +248,8 @@ if __name__ == "__main__":
         name = basename(chpt)
         results[name] = result[0]
     torch.save(results, "evaluation_reg_scores.pt")
-    # torch.save(results, "evaluation_scores.pt")
-    # r = torch.load("evaluation_scores.pt")
+    # torch.save(results, "assets/evaluation_scores.pt")
+    # r = torch.load("assets/evaluation_scores.pt")
 
     r = torch.load("evaluation_reg_scores.pt")
 
