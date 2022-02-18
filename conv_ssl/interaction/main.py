@@ -8,6 +8,7 @@ from pytorch_lightning import Trainer
 from conv_ssl.model import VPModel
 from conv_ssl.utils import to_device, everything_deterministic
 from conv_ssl.plot_utils import plot_window
+from conv_ssl.evaluation.plotly_things import plotly_discrete, plotly_independent
 
 from datasets_turntaking import DialogAudioDM
 
@@ -17,7 +18,9 @@ st.set_page_config(layout="wide")
 
 BATCH_SIZE = 10
 NUM_WORKERS = 4
-CHECKPOINT = "checkpoints/cpc/cpc_04_44.ckpt"
+# CHECKPOINT = "checkpoints/cpc/cpc_04_44.ckpt"
+CHECKPOINT = "artifacts/model-2wbyll6r:v0/model.ckpt"
+# CHECKPOINT = "artifacts/model-27ly86w3:v0/model.ckpt"
 
 everything_deterministic()
 
@@ -96,31 +99,69 @@ def forward_pass():
     batch = st.session_state.current_sample
     batch = to_device(batch, model.device)
 
+    # model.val_metric.reset()
+    # with torch.no_grad():
+    #     _, out, batch = model.shared_step(batch)
+    #     probs, pre_probs = model.get_next_speaker_probs(
+    #         out["logits_vp"], vad=batch["vad"]
+    #     )
+    #     events = model.val_metric.extract_events(batch["vad"])
+    #     model.val_metric.update(probs, None, events=events, bc_pre_probs=pre_probs)
+    #     result = model.val_metric.compute()
+
     model.val_metric.reset()
     with torch.no_grad():
+        batch = to_device(batch, model.device)
         _, out, batch = model.shared_step(batch)
-        probs, pre_probs = model.get_next_speaker_probs(
+        out["next_probs"], out["pre_probs"] = model.get_next_speaker_probs(
             out["logits_vp"], vad=batch["vad"]
         )
-        events = model.val_metric.extract_events(batch["vad"])
-        model.val_metric.update(probs, None, events=events, bc_pre_probs=pre_probs)
-        result = model.val_metric.compute()
+        out["events"] = model.val_metric.extract_events(batch["vad"])
+        model.val_metric.update(
+            out["next_probs"], None, events=out["events"], bc_pre_probs=out["pre_probs"]
+        )
+        out["result"] = model.val_metric.compute()
+        if model.conf["vad_projection"]["regression"]:
+            out["probs"] = out["logits_vp"].sigmoid()
+        else:
+            out["probs"] = out["logits_vp"].softmax(dim=-1)
+            topk_p, topk_idx = out["probs"].topk(dim=-1, k=5)
+            topk_onehot = model.projection_codebook.idx_to_onehot(topk_idx)
+            out["topk"] = {"p": topk_p, "idx": topk_idx, "onehot": topk_onehot}
 
-    st.session_state.result = result
+    st.session_state.result = out["result"]
 
     b = 0
-    fig, ax = plot_window(
-        probs[b],
-        vad=batch["vad"][b],
-        hold=events["hold"][b],
-        shift=events["shift"][b],
-        pre_hold=events["pre_hold"][b],
-        pre_shift=events["pre_shift"][b],
-        backchannels=events["backchannels"][b],
-        plot=False,
-    )
+    vad = batch["vad"][b].cpu().numpy()
+    next_probs = out["next_probs"][b].cpu().numpy()
+    if model.conf["vad_projection"]["regression"]:
+        fig = plotly_independent(
+            probs=out["probs"][b].cpu().numpy(),
+            pre_probs=out["pre_probs"][b].cpu().numpy(),
+            next_probs=next_probs,
+            vad=vad,
+        )
+    else:
+        probs = out["topk"]["p"][b].cpu().numpy()
+        onehot = out["topk"]["onehot"][b].cpu().numpy()
+        idx = out["topk"]["idx"][b].cpu().numpy()
+        fig = plotly_discrete(
+            probs=probs, onehot=onehot, next_probs=next_probs, vad=vad
+        )
     st.session_state.fig = fig
-    st.session_state.ax = ax
+
+    # fig, ax = plot_window(
+    #     probs[b],
+    #     vad=batch["vad"][b],
+    #     hold=events["hold"][b],
+    #     shift=events["shift"][b],
+    #     pre_hold=events["pre_hold"][b],
+    #     pre_shift=events["pre_shift"][b],
+    #     backchannels=events["backchannels"][b],
+    #     plot=False,
+    # )
+    # st.session_state.fig = fig
+    # st.session_state.ax = ax
 
 
 def evaluate():
@@ -172,7 +213,8 @@ if __name__ == "__main__":
     if st.session_state.audio_file != "":
         st.audio(st.session_state.audio_file, format="audio/wav")
 
-    st.pyplot(st.session_state.fig)
+    # st.pyplot(st.session_state.fig)
+    st.plotly_chart(st.session_state.fig, use_container_width=True)
 
     if st.session_state.result != {}:
         c1, c2, c3 = st.columns([1, 1, 1])
