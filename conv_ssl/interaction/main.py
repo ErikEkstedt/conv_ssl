@@ -19,8 +19,8 @@ st.set_page_config(layout="wide")
 BATCH_SIZE = 10
 NUM_WORKERS = 4
 # CHECKPOINT = "checkpoints/cpc/cpc_04_44.ckpt"
-CHECKPOINT = "artifacts/model-2wbyll6r:v0/model.ckpt"
-# CHECKPOINT = "artifacts/model-27ly86w3:v0/model.ckpt"
+CHECKPOINT = "artifacts/model-2wbyll6r:v0/model.ckpt"  # discrete
+# CHECKPOINT = "artifacts/model-27ly86w3:v0/model.ckpt"  # independent
 
 everything_deterministic()
 
@@ -146,10 +146,13 @@ def forward_pass():
         onehot = out["topk"]["onehot"][b].cpu().numpy()
         idx = out["topk"]["idx"][b].cpu().numpy()
         fig = plotly_discrete(
-            probs=probs, onehot=onehot, next_probs=next_probs, vad=vad
+            probs=probs,
+            onehot=onehot,
+            next_probs=next_probs,
+            vad=vad,
+            figsize=[900, 600],
         )
     st.session_state.fig = fig
-
     # fig, ax = plot_window(
     #     probs[b],
     #     vad=batch["vad"][b],

@@ -74,9 +74,13 @@ def load_model(checkpoint_path=None, run_path=None, eval=True, **kwargs):
     return model
 
 
-def load_dm(model, batch_size=4, num_workers=4):
+def load_dm(model=None, vad_hz=100, horizon=2, batch_size=4, num_workers=4):
     data_conf = DialogAudioDM.load_config()
-    horizon = round(sum(model.conf["vad_projection"]["bin_times"]), 2)
+
+    if model is not None:
+        horizon = round(sum(model.conf["vad_projection"]["bin_times"]), 2)
+        vad_hz = model.frame_hz
+
     dm = DialogAudioDM(
         datasets=data_conf["dataset"]["datasets"],
         type=data_conf["dataset"]["type"],
@@ -84,7 +88,7 @@ def load_dm(model, batch_size=4, num_workers=4):
         audio_normalize=data_conf["dataset"]["audio_normalize"],
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
-        vad_hz=model.frame_hz,
+        vad_hz=vad_hz,
         vad_horizon=horizon,
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],

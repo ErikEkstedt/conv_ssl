@@ -12,9 +12,10 @@ def forward(batch, model):
     with torch.no_grad():
         batch = to_device(batch, model.device)
         _, out, batch = model.shared_step(batch)
-        out["next_probs"], out["pre_probs"] = model.get_next_speaker_probs(
+        turn_taking_probs = model.get_next_speaker_probs(
             out["logits_vp"], vad=batch["vad"]
         )
+        out.update(turn_taking_probs)
         out["events"] = model.val_metric.extract_events(batch["vad"])
         model.val_metric.update(
             out["next_probs"], None, events=out["events"], bc_pre_probs=out["pre_probs"]
@@ -57,7 +58,7 @@ def get_vad_traces(vad):
     return vad_traces
 
 
-def get_next_prob_traces(next_probs, pre_probs=None):
+def get_next_prob_traces(next_probs, pre_probs=None, pw=None):
     n_frames = next_probs.shape[0]
     x = np.arange(0, n_frames)
     traces = [
@@ -106,6 +107,26 @@ def get_next_prob_traces(next_probs, pre_probs=None):
                 name="B pre",
                 x=x,
                 y=pre_probs[:, 1] - 1,
+            )
+        )
+
+    if pw is not None:
+        traces.append(
+            go.Scattergl(
+                visible=True,
+                line=dict(width=1, color=A_COLOR[1], dash="dash"),
+                name="pwA",
+                x=x,
+                y=pw[:, 0],
+            )
+        )
+        traces.append(
+            go.Scattergl(
+                visible=True,
+                line=dict(width=1, color=B_COLOR[1], dash="dash"),
+                name="pwB",
+                x=x,
+                y=pw[:, 1] - 1,
             )
         )
 
@@ -227,7 +248,8 @@ def get_projection_window_static_traces(k, bin_times, vad_hz):
 def get_topk_traces(probs, onehot, bin_times, vad_hz, step_size=10):
     n_frames = probs.shape[0]
     k = probs.shape[-1]
-    x = np.array(bin_times) * vad_hz
+    # x = np.array(bin_times) * vad_hz
+    x = np.array([0] + bin_times) * vad_hz
     x = x.cumsum()
     step_traces = []
     current_steps = []
@@ -245,14 +267,17 @@ def get_topk_traces(probs, onehot, bin_times, vad_hz, step_size=10):
         k_traces = []
         for nk in range(k):
             oh = onehot[step, nk]
+            oh0 = onehot[step, nk, :, :1]
+            oh = np.concatenate((oh0, oh), axis=-1)
             p = probs[step, nk] * 2  # scale to cover entire y
+
             tmp_k = []
             # Probability
             tmp_k.append(
                 go.Scattergl(
                     visible=False,
                     mode="lines",
-                    line=dict(shape="vh", width=20, color="red"),
+                    line=dict(width=10, color="red"),
                     showlegend=False,
                     x=[-11, -11],
                     y=[-1, p - 1],
@@ -315,7 +340,7 @@ def plotly_independent(
     bin_times=[0.2, 0.4, 0.6, 0.8],
     vad_hz=100,
     step_size=10,
-    figsize=(900, 600),
+    figsize=(900, 500),
 ):
     fig = go.Figure(layout=dict(width=figsize[0], height=figsize[1]))
     ######################################################################
@@ -358,10 +383,11 @@ def plotly_discrete(
     onehot,
     next_probs,
     vad,
+    pw=None,
     bin_times=[0.2, 0.4, 0.6, 0.8],
     vad_hz=100,
     step_size=10,
-    figsize=(1200, 600),
+    figsize=(900, 500),
 ):
     """
     bin_times=[0.2, 0.4, 0.6, 0.8]
@@ -392,7 +418,7 @@ def plotly_discrete(
     n_always_visible = 0
     n_traces = 0
     vad_traces = get_vad_traces(vad)
-    next_prob_traces = get_next_prob_traces(next_probs)
+    next_prob_traces = get_next_prob_traces(next_probs, pw=pw)
     fig.add_traces(vad_traces, rows=1, cols=1)
     fig.add_traces(next_prob_traces, rows=1, cols=1)
     n_always_visible += len(vad_traces)
@@ -437,6 +463,7 @@ def plotly_discrete(
         "steps": steps,
         "pad": {"l": 0, "r": 0},
         "len": 0.75,
+        "transition": {"duration": 0, "easing": "linear"},
     }
     ######################################################################
     # Add slider and axis info
@@ -449,40 +476,36 @@ if __name__ == "__main__":
     from conv_ssl.evaluation.utils import load_model, load_dm
     from conv_ssl.utils import to_device
 
-    # run_path = "how_so/VPModel/27ly86w3"  # independent (same bin size)
-    run_path = "how_so/VPModel/2wbyll6r"  # discrete
+    discrete = True
+    if discrete:
+        run_path = "how_so/VPModel/2wbyll6r"  # discrete
+    else:
+        run_path = "how_so/VPModel/27ly86w3"  # independent (same bin size)
     model = load_model(run_path=run_path)
     dm = load_dm(model, batch_size=4, num_workers=0)
-
     batch = next(iter(dm.val_dataloader()))
     out, batch = forward(batch, model)
+
     b = 1
-    probs = out["probs"][b].cpu()
-    next_probs = out["next_probs"][b].cpu()
-    pre_probs = None
-    if out["pre_probs"] is not None:
-        pre_probs = out["pre_probs"][b].cpu()
-        print("pre_probs: ", tuple(pre_probs.shape))
-    vad = batch["vad"][b].cpu()
-    print("probs: ", tuple(probs.shape))
-    print("next_probs: ", tuple(next_probs.shape))
-    print("vad: ", tuple(vad.shape))
-    if "topk" in out:
-        topk = {
-            "p": out["topk"]["p"][b].cpu(),
-            "idx": out["topk"]["idx"][b].cpu(),
-            "onehot": out["topk"]["onehot"][b].cpu(),
-        }
-        print("topk p: ", tuple(topk["p"].shape))
-        print("topk oh: ", tuple(topk["onehot"].shape))
-
-    # Independent FIG
-    # fig = plotly_independent(probs, next_probs, pre_probs, vad)
-    # fig.show()
-
+    #############################################################
     # Discrete FIG
-    probs = topk["p"].numpy()
-    onehot = topk["onehot"].numpy()
-    idx = topk["idx"].numpy()
-    fig = plotly_discrete(probs=probs, onehot=onehot, vad=vad)
-    fig.show()
+    if discrete:
+        fig = plotly_discrete(
+            probs=out["topk"]["p"][b].cpu(),
+            onehot=out["topk"]["onehot"][b].cpu(),
+            next_probs=out["next_probs"][b].cpu(),
+            pw=out["pw"][b].cpu(),
+            # pw=out['pw_topk'][b].cpu(),
+            vad=batch["vad"][b].cpu(),
+        )
+        fig.show()
+    else:
+        #############################################################
+        # Independent FIG
+        fig = plotly_independent(
+            probs=out["probs"][b].cpu(),
+            next_probs=out["next_probs"][b].cpu(),
+            pre_probs=out["pre_probs"][b].cpu(),
+            vad=batch["vad"][b].cpu(),
+        )
+        fig.show()

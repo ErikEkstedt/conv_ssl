@@ -317,18 +317,73 @@ class VPModel(pl.LightningModule):
         probs = probs / tot
         return probs
 
+    def _discrete_comparative(self, probs):
+        comparative_probs = self.projection_codebook.comparative_probabilities.to(
+            probs.device
+        )
+        pw = comparative_probs.unsqueeze(0) * probs.unsqueeze(-1)  # (N, n_classes, 2)
+        pw = pw.sum(dim=-2)  # (N, 2)
+        return pw
+
+    def _discrete_topk_comparative(self, probs, k=5):
+        comparative_probs = self.projection_codebook.comparative_probabilities.to(
+            probs.device
+        )
+
+        # select topk-idx and associated probabilities
+        p_topk, idx = probs.topk(k)
+        c = comparative_probs[idx]
+
+        pw_top = c * p_topk.unsqueeze(-1)  # (B, N, n_classes, 2)
+        pw_top = pw_top.sum(dim=-2)  # (B, N, 2)
+
+        # renormalize
+        pw_top = pw_top / pw_top.sum(dim=-1, keepdim=True)  # (B, N, 2)
+        return pw_top
+
+    def next_speaker_probs_discrete(self, logits, vad):
+        """"""
+        # Compare chosen subset of next-speaker-activity
+        next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
+
+        probs = logits.softmax(dim=-1)
+        # weighted average of comparative-activity
+        pw = self._discrete_comparative(probs)
+        # topk weighted average of comparative-activity
+        pw_topk = self._discrete_topk_comparative(probs, k=5)
+        return {
+            "next_probs": next_probs,
+            "pw": pw,
+            "pw_topk": pw_topk,
+        }
+
+    def next_speaker_probs_independent(self, logits):
+        """"""
+        # Compare chosen subset of next-speaker-activity
+        probs = logits.sigmoid()
+        next_probs = self._normalize_reg_probs(probs)
+        pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
+        return {
+            "next_probs": next_probs,
+            "pre_probs": pre_probs,
+        }
+
+    def next_speaker_probs_comparative(self, logits):
+        probs = logits.sigmoid()
+        next_probs = torch.cat((probs, 1 - probs), dim=-1)
+        return {"next_probs": next_probs}
+
     def get_next_speaker_probs(self, logits, vad=None):
-        pre_probs = None
+        out = {"pre_probs": None}
         if self.regression:
-            probs = logits.sigmoid()
             if self.conf["vad_projection"]["comparative"]:
-                next_probs = torch.cat((probs, 1 - probs), dim=-1)
+                o = self.next_speaker_probs_independent(logits)
             else:
-                next_probs = self._normalize_reg_probs(probs)
-                pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
+                o = self.next_speaker_probs_independent(logits)
         else:
-            next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
-        return next_probs, pre_probs
+            o = self.next_speaker_probs_discrete(logits, vad)
+        out.update(o)
+        return out
 
     def calc_losses(self, out, vad_projection_window, input_ids=None, reduction="mean"):
         loss = {}
@@ -448,10 +503,14 @@ class VPModel(pl.LightningModule):
         if "loss_ar" in loss:
             self.log("val_loss_ar", loss["ar"], batch_size=batch_size)
 
-        next_probs, pre_probs = self.get_next_speaker_probs(
+        turn_taking_probs = self.get_next_speaker_probs(
             out["logits_vp"], vad=batch["vad"]
         )
-        self.val_metric.update(next_probs, vad=batch["vad"], bc_pre_probs=pre_probs)
+        self.val_metric.update(
+            next_probs=turn_taking_probs["next_probs"],
+            vad=batch["vad"],
+            bc_pre_probs=turn_taking_probs["pre_probs"],
+        )
 
     def validation_epoch_end(self, outputs) -> None:
         r = self.val_metric.compute()
@@ -480,10 +539,14 @@ class VPModel(pl.LightningModule):
         if self.test_metric is None:
             self.test_metric = ShiftHoldMetric()
 
-        next_probs, pre_probs = self.get_next_speaker_probs(
+        turn_taking_probs = self.get_next_speaker_probs(
             out["logits_vp"], vad=batch["vad"]
         )
-        self.test_metric.update(next_probs, vad=batch["vad"], bc_pre_probs=pre_probs)
+        self.test_metric.update(
+            next_probs=turn_taking_probs["next_probs"],
+            vad=batch["vad"],
+            bc_pre_probs=turn_taking_probs["pre_probs"],
+        )
 
     def test_epoch_end(self, outputs) -> None:
         r = self.test_metric.compute()
