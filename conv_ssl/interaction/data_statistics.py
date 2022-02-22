@@ -142,10 +142,13 @@ if __name__ == "__main__":
 
     VL = VadLabel(bin_times=bin_times, vad_hz=frame_hz, threshold_ratio=0.5)
     PC = ProjectionCodebook(bin_times=bin_times, frame_hz=frame_hz)
-
     stats = extract_statistics(dm.val_dataloader(), VL=VL, PC=PC)
+    torch.save(stats, "assets/val_stats.pt")
 
     q_prior = stats["discrete"] / stats["discrete"].sum()
+    p_log_p = q_prior * q_prior.log2()
+    ent = -p_log_p.sum(-1)
+    print("entropy: ", ent)
 
     # silence
     A_next = PC.on_silent_shift[0]
@@ -173,11 +176,19 @@ if __name__ == "__main__":
     N = 256
     d, idx = q_prior.sort(descending=True)
     fig, ax = plt.subplots(1, 1, figsize=(12, 4))
-    ax.bar(torch.arange(len(d[:N])), d[:N])
-    ax.bar(A_next, d[A_next], color="red")
-    ax.bar(B_next, d[B_next], color="orange")
+    ax.bar(
+        torch.arange(len(d[:N])),
+        d[:N],
+        label=f"Entropy: {round(ent.item(),2)} bits",
+    )
+    ax.bar(A_next, d[A_next], color="red", label="A is next")
+    ax.bar(B_next, d[B_next], color="orange", label="B is next")
+    ax.legend(loc="upper right")
+    ax.set_ylabel("log probabilitiy")
+    ax.set_xlabel("Projection window, Rank")
     ax.hlines(y=1 / 256, xmin=0, xmax=N)
     ax.set_yscale("log")
+    fig.suptitle("Validation Set")
     # ax.set_xticks(list(range(len(d[:N]))))
     # ax.set_xticklabels(idx[:N].tolist(), fontsize=8, rotation=45)
     plt.tight_layout()
@@ -185,14 +196,17 @@ if __name__ == "__main__":
 
     from torch.distributions import Categorical
 
-    qd = Categorical(probs=d)
+    ent = Categorical(probs=q_prior).entropy()
+
     uni_ent = Categorical(probs=torch.ones(256) / 256).entropy()
     ent = qd.entropy()
 
+    stats = torch.load("assets/val_stats.pt")
+
     # stats = extract_statistics(dm.val_dataloader())
-    # torch.save(stats, "val_stats.pt")
+    # torch.save(stats, "assets/val_stats.pt")
     # stats = extract_statistics(dm.train_dataloader())
-    # torch.save(stats, "train_stats.pt")
+    # torch.save(stats, "assets/train_stats.pt")
     # tot = stats["hold"]["n"] + stats["shift"]["n"] + stats["bc"]["n"]
     # rh = stats["hold"]["n"] / tot
     # rs = stats["shift"]["n"] / tot
