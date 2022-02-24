@@ -205,7 +205,92 @@ class ProjectionModel(nn.Module):
         return out
 
 
-class VPModel(pl.LightningModule):
+class VadProjectionTask(pl.LightningModule):
+    def _normalize_reg_probs(self, probs):
+        probs = probs.sum(dim=-1)
+        tot = probs.sum(dim=-1, keepdim=True)
+        # renormalize for comparison
+        probs = probs / tot
+        return probs
+
+    def _discrete_comparative(self, probs):
+        """
+        Get the comparative score for each class `codebook.comparative_probabilities`
+        and scale them with their associated probabilities to get a final estimate of who the
+        "winner" should be, or more precicely their new weighted probability scores.
+
+        i.e. batch 0, step 10 ->  p_a: 0.65 p_b: 0.35 etc etc
+        """
+        comparative_probs = self.projection_codebook.comparative_probabilities.to(
+            probs.device
+        )
+        pw = comparative_probs.unsqueeze(0) * probs.unsqueeze(-1)  # (N, n_classes, 2)
+        pw = pw.sum(dim=-2)  # (N, 2)
+        return pw
+
+    def _discrete_topk_comparative(self, probs, k=5):
+        comparative_probs = self.projection_codebook.comparative_probabilities.to(
+            probs.device
+        )
+
+        # select topk-idx and associated probabilities
+        p_topk, idx = probs.topk(k)
+        c = comparative_probs[idx]
+
+        pw_top = c * p_topk.unsqueeze(-1)  # (B, N, n_classes, 2)
+        pw_top = pw_top.sum(dim=-2)  # (B, N, 2)
+
+        # renormalize
+        pw_top = pw_top / pw_top.sum(dim=-1, keepdim=True)  # (B, N, 2)
+        return pw_top
+
+    def next_speaker_probs_discrete(self, logits, vad):
+        """"""
+        # Compare chosen subset of next-speaker-activity
+        next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
+
+        probs = logits.softmax(dim=-1)
+        # weighted average of comparative-activity
+        pw = self._discrete_comparative(probs)
+        # topk weighted average of comparative-activity
+        pw_topk = self._discrete_topk_comparative(probs, k=5)
+        return {
+            "next_probs": next_probs,
+            "pw": pw,
+            "pw_topk": pw_topk,
+        }
+
+    def next_speaker_probs_independent(self, logits):
+        """"""
+        # Compare chosen subset of next-speaker-activity
+        probs = logits.sigmoid()
+        next_probs = self._normalize_reg_probs(probs)
+        pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
+        return {
+            "next_probs": next_probs,
+            "pre_probs": pre_probs,
+        }
+
+    def next_speaker_probs_comparative(self, logits):
+        probs = logits.sigmoid()
+        next_probs = torch.cat((probs, 1 - probs), dim=-1)
+        return {"next_probs": next_probs}
+
+    def get_next_speaker_probs(self, logits, vad=None):
+        out = {"pre_probs": None}
+        if self.regression:
+            if self.conf["vad_projection"]["comparative"]:
+                o = self.next_speaker_probs_independent(logits)
+            else:
+                o = self.next_speaker_probs_independent(logits)
+        else:
+            o = self.next_speaker_probs_discrete(logits, vad)
+        out.update(o)
+        return out
+
+
+# class VPModel(pl.LightningModule):
+class VPModel(VadProjectionTask):
     @staticmethod
     def load_config(path=None, args=None, format="dict"):
         return ProjectionModel.load_config(path, args, format)
@@ -309,81 +394,6 @@ class VPModel(pl.LightningModule):
             betas=self.betas,
             weight_decay=self.weight_decay,
         )
-
-    def _normalize_reg_probs(self, probs):
-        probs = probs.sum(dim=-1)
-        tot = probs.sum(dim=-1, keepdim=True)
-        # renormalize for comparison
-        probs = probs / tot
-        return probs
-
-    def _discrete_comparative(self, probs):
-        comparative_probs = self.projection_codebook.comparative_probabilities.to(
-            probs.device
-        )
-        pw = comparative_probs.unsqueeze(0) * probs.unsqueeze(-1)  # (N, n_classes, 2)
-        pw = pw.sum(dim=-2)  # (N, 2)
-        return pw
-
-    def _discrete_topk_comparative(self, probs, k=5):
-        comparative_probs = self.projection_codebook.comparative_probabilities.to(
-            probs.device
-        )
-
-        # select topk-idx and associated probabilities
-        p_topk, idx = probs.topk(k)
-        c = comparative_probs[idx]
-
-        pw_top = c * p_topk.unsqueeze(-1)  # (B, N, n_classes, 2)
-        pw_top = pw_top.sum(dim=-2)  # (B, N, 2)
-
-        # renormalize
-        pw_top = pw_top / pw_top.sum(dim=-1, keepdim=True)  # (B, N, 2)
-        return pw_top
-
-    def next_speaker_probs_discrete(self, logits, vad):
-        """"""
-        # Compare chosen subset of next-speaker-activity
-        next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
-
-        probs = logits.softmax(dim=-1)
-        # weighted average of comparative-activity
-        pw = self._discrete_comparative(probs)
-        # topk weighted average of comparative-activity
-        pw_topk = self._discrete_topk_comparative(probs, k=5)
-        return {
-            "next_probs": next_probs,
-            "pw": pw,
-            "pw_topk": pw_topk,
-        }
-
-    def next_speaker_probs_independent(self, logits):
-        """"""
-        # Compare chosen subset of next-speaker-activity
-        probs = logits.sigmoid()
-        next_probs = self._normalize_reg_probs(probs)
-        pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
-        return {
-            "next_probs": next_probs,
-            "pre_probs": pre_probs,
-        }
-
-    def next_speaker_probs_comparative(self, logits):
-        probs = logits.sigmoid()
-        next_probs = torch.cat((probs, 1 - probs), dim=-1)
-        return {"next_probs": next_probs}
-
-    def get_next_speaker_probs(self, logits, vad=None):
-        out = {"pre_probs": None}
-        if self.regression:
-            if self.conf["vad_projection"]["comparative"]:
-                o = self.next_speaker_probs_independent(logits)
-            else:
-                o = self.next_speaker_probs_independent(logits)
-        else:
-            o = self.next_speaker_probs_discrete(logits, vad)
-        out.update(o)
-        return out
 
     def calc_losses(self, out, vad_projection_window, input_ids=None, reduction="mean"):
         loss = {}
@@ -507,7 +517,7 @@ class VPModel(pl.LightningModule):
             out["logits_vp"], vad=batch["vad"]
         )
         self.val_metric.update(
-            next_probs=turn_taking_probs["next_probs"],
+            p_next=turn_taking_probs["next_probs"],
             vad=batch["vad"],
             bc_pre_probs=turn_taking_probs["pre_probs"],
         )
@@ -543,7 +553,7 @@ class VPModel(pl.LightningModule):
             out["logits_vp"], vad=batch["vad"]
         )
         self.test_metric.update(
-            next_probs=turn_taking_probs["next_probs"],
+            p_next=turn_taking_probs["next_probs"],
             vad=batch["vad"],
             bc_pre_probs=turn_taking_probs["pre_probs"],
         )

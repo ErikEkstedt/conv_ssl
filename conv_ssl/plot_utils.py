@@ -524,6 +524,7 @@ def plot_window(
     pre_hold,
     pre_shift,
     backchannels,
+    only_over_05=True,
     plot_kwargs=dict(
         alpha_event=0.2,
         alpha_vad=0.6,
@@ -662,14 +663,18 @@ def plot_window(
     # Speaker Probs
     axes = ax[n].twinx()
 
-    wa = torch.where(probs[:, 0] >= 0.5)[0]
-    wb = torch.where(probs[:, 1] >= 0.5)[0]
-    pa = np.zeros_like(probs[:, 0])
-    pb = np.zeros_like(probs[:, 0])
-    pa[wa] = probs[:, 0][wa]
-    pa[wb] = np.nan
-    pb[wb] = probs[:, 1][wb]
-    pb[wa] = np.nan
+    if only_over_05:
+        wa = torch.where(probs[:, 0] >= 0.5)[0]
+        wb = torch.where(probs[:, 1] >= 0.5)[0]
+        pa = np.zeros_like(probs[:, 0])
+        pb = np.zeros_like(probs[:, 0])
+        pa[wa] = probs[:, 0][wa]
+        pa[wb] = np.nan
+        pb[wb] = probs[:, 1][wb]
+        pb[wa] = np.nan
+    else:
+        pa = probs[:, 0]
+        pb = probs[:, 1]
 
     axes.plot(
         pa,

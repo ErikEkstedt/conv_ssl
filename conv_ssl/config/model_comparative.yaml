@@ -26,13 +26,13 @@ ulm:
 ar:
   type: 'transformer'
   dim: 256
-  num_layers: 1
+  num_layers: 4
   num_heads: 4
   use_pos_emb: 1
   abspos: true
   sizeSeq: 1024
   dff_k: 3
-  dropout: 0.1
+  dropout: 0.4
 
 vad_cond:
   pre_ulm: true
