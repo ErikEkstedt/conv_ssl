@@ -8,7 +8,8 @@ import pytorch_lightning as pl
 from conv_ssl.models import Encoder, AR
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
-from vad_turn_taking.metrics import ShiftHoldMetric
+from vad_turn_taking.vad import VAD
+from vad_turn_taking.metrics import TurnTakingMetrics
 from vad_turn_taking.vad_projection import VadLabel, ProjectionCodebook
 
 
@@ -244,8 +245,27 @@ class VadProjectionTask(pl.LightningModule):
         pw_top = pw_top / pw_top.sum(dim=-1, keepdim=True)  # (B, N, 2)
         return pw_top
 
+    def _discrete_bc_prediction(self, probs):
+        """Backchannel prediction task"""
+        # combine probabilities associated with future backchannel from A/B
+        bc_idx = self.projection_codebook.bc_active  # prediction
+        ap = probs[..., bc_idx[0]].sum(-1)
+        bp = probs[..., bc_idx[1]].sum(-1)
+        return torch.stack((ap, bp), dim=-1)
+
+    def _independent_bc_prediction(self, probs):
+        """Backchannel prediction task"""
+
+        p_bc_a = probs[..., 0, self.pre_frames : -1]
+        p_bc_b = probs[..., 1, self.pre_frames : -1]
+
+        # probs.shape: (B, N, 2, M)
+        raise NotImplementedError("independent BC prediction is not defined")
+
     def next_speaker_probs_discrete(self, logits, vad):
-        """"""
+        """
+        Probabilities for turn-taking task given the DISCRETE model
+        """
         # Compare chosen subset of next-speaker-activity
         next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
 
@@ -254,24 +274,30 @@ class VadProjectionTask(pl.LightningModule):
         pw = self._discrete_comparative(probs)
         # topk weighted average of comparative-activity
         pw_topk = self._discrete_topk_comparative(probs, k=5)
+        # Backchannel prediction
+        bc_pred = self._discrete_bc_prediction(probs)
         return {
             "next_probs": next_probs,
             "pw": pw,
             "pw_topk": pw_topk,
+            "bc_prediction": bc_pred,
         }
 
     def next_speaker_probs_independent(self, logits):
-        """"""
+        """
+        Probabilities for turn-taking task given the INDEPENDENT model
+        """
         # Compare chosen subset of next-speaker-activity
         probs = logits.sigmoid()
         next_probs = self._normalize_reg_probs(probs)
         pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
-        return {
-            "next_probs": next_probs,
-            "pre_probs": pre_probs,
-        }
+        # bc_prediction = self._independent_bc_prediction(probs)
+        return {"next_probs": next_probs, "pre_probs": pre_probs, "bc_prediction": None}
 
     def next_speaker_probs_comparative(self, logits):
+        """
+        Probabilities for turn-taking task given the COMPARATIVE model
+        """
         probs = logits.sigmoid()
         next_probs = torch.cat((probs, 1 - probs), dim=-1)
         return {"next_probs": next_probs}
@@ -280,7 +306,7 @@ class VadProjectionTask(pl.LightningModule):
         out = {"pre_probs": None}
         if self.regression:
             if self.conf["vad_projection"]["comparative"]:
-                o = self.next_speaker_probs_independent(logits)
+                o = self.next_speaker_probs_comparative(logits)
             else:
                 o = self.next_speaker_probs_independent(logits)
         else:
@@ -299,20 +325,22 @@ class VPModel(VadProjectionTask):
         super().__init__()
         self.net = ProjectionModel(conf)
 
-        # Metrics
-        self.val_metric = ShiftHoldMetric(
-            min_context=conf["vad_projection"]["event_min_context"],
-            horizon=conf["vad_projection"]["event_horizon"],
-            start_pad=conf["vad_projection"]["event_start_pad"],
-            target_duration=conf["vad_projection"]["event_target_duration"],
-            frame_hz=self.net.encoder.frame_hz,
-        )
-        self.test_metric = None  # set in test if necessary
+        # Extract labels
         self.vad_label_maker = VadLabel(
             bin_times=conf["vad_projection"]["bin_times"],
             vad_hz=self.net.encoder.frame_hz,
             threshold_ratio=conf["vad_projection"]["vad_threshold"],
         )
+
+        # conf
+        self.frame_hz = self.net.encoder.frame_hz
+        self.conf = conf
+
+        # Metrics
+        self.val_metric = self.init_metric(conf, frame_hz=self.frame_hz)
+        self.test_metric = None  # set in test if necessary
+
+        # NOTE: Unused?
         self.event_dict = dict(
             bin_times=conf["vad_projection"]["bin_times"],
             vad_threshold=conf["vad_projection"]["vad_threshold"],
@@ -322,6 +350,9 @@ class VPModel(VadProjectionTask):
             event_horizon=conf["vad_projection"]["event_horizon"],
             event_start_pad=conf["vad_projection"]["event_start_pad"],
             event_target_duration=conf["vad_projection"]["event_target_duration"],
+            event_bc_pre_silence=conf["vad_projection"]["event_bc_pre_silence"],
+            event_bc_post_silence=conf["vad_projection"]["event_bc_post_silence"],
+            event_bc_max_active=conf["vad_projection"]["event_bc_max_active"],
             frame_hz=self.net.encoder.frame_hz,
         )
 
@@ -334,16 +365,42 @@ class VPModel(VadProjectionTask):
                 frame_hz=self.net.encoder.frame_hz,
             )
 
-        # conf
-        self.frame_hz = self.net.encoder.frame_hz
-        self.conf = conf
-
         # Training params
         self.learning_rate = conf["optimizer"]["learning_rate"]
         self.betas = conf["optimizer"]["betas"]
         self.alpha = conf["optimizer"]["alpha"]
         self.weight_decay = conf["optimizer"]["weight_decay"]
         self.save_hyperparameters()
+
+    def init_metric(self, conf, frame_hz):
+        return TurnTakingMetrics(
+            min_context=conf["vad_projection"][
+                "event_min_context"
+            ],  # don't extract events before a certain context is known
+            horizon=conf["vad_projection"][
+                "event_horizon"
+            ],  # the event-horizon (same as vad)
+            start_pad=conf["vad_projection"][
+                "event_start_pad"
+            ],  # time after activity to start use frames for prediction
+            target_duration=conf["vad_projection"][
+                "event_target_duration"
+            ],  # number of frames to use in metrics/event
+            frame_hz=frame_hz,  # the frame-hz of vad-representation
+            pre_active=conf["vad_projection"][
+                "event_pre"
+            ],  # time at eot to predict shift/holf
+            bc_pre_silence=conf["vad_projection"][
+                "event_bc_pre_silence"
+            ],  # silence before activity to be considered BC
+            bc_post_silence=conf["vad_projection"][
+                "event_bc_post_silence"
+            ],  # silence after activity to be considered BC
+            bc_max_active=conf["vad_projection"][
+                "event_bc_max_active"
+            ],  # longest activity to be considered BC
+            discrete=not conf["vad_projection"]["regression"],  # discrete model or not
+        )
 
     @property
     def run_name(self):
@@ -505,21 +562,32 @@ class VPModel(VadProjectionTask):
         return {"loss": loss["total"]}
 
     def validation_step(self, batch, batch_idx, **kwargs):
+        """validation step"""
+
+        # extract events for metrics (use full vad including horizon)
+        events = self.val_metric.extract_events(batch["vad"])
+
+        # Regular forward pass
         loss, out, batch = self.shared_step(batch)
         batch_size = batch["vad"].shape[0]
 
+        # log scores
         self.log("val_loss", loss["total"], batch_size=batch_size)
         self.log("val_loss_vp", loss["vp"], batch_size=batch_size)
         if "loss_ar" in loss:
             self.log("val_loss_ar", loss["ar"], batch_size=batch_size)
 
+        # Extract other metrics
         turn_taking_probs = self.get_next_speaker_probs(
             out["logits_vp"], vad=batch["vad"]
         )
         self.val_metric.update(
-            p_next=turn_taking_probs["next_probs"],
-            vad=batch["vad"],
-            bc_pre_probs=turn_taking_probs["pre_probs"],
+            p=turn_taking_probs["next_probs"],
+            pw=turn_taking_probs.get("pw", None),  # only in discrete
+            pw_top=turn_taking_probs.get("pw_top", None),  # only in discrete
+            pre_probs=turn_taking_probs.get("pre_probs", None),  # only in independent
+            bc_pred_probs=turn_taking_probs.get("bc_prediction", None),
+            events=events,
         )
 
     def validation_epoch_end(self, outputs) -> None:
@@ -538,24 +606,33 @@ class VPModel(VadProjectionTask):
         self.val_metric.reset()
 
     def test_step(self, batch, batch_idx, **kwargs):
+        if self.test_metric is None:
+            self.text_metric = self.init_metric(self.conf, self.frame_hz)
+
+        # extract events for metrics (use full vad including horizon)
+        events = self.test_metric.extract_events(batch["vad"])
+
+        # Regular forward pass
         loss, out, batch = self.shared_step(batch)
         batch_size = batch["vad"].shape[0]
 
+        # log scores
         self.log("test_loss", loss["total"], batch_size=batch_size)
         self.log("test_loss_vp", loss["vp"], batch_size=batch_size)
         if "loss_ar" in loss:
             self.log("test_loss_ar", loss["ar"], batch_size=batch_size)
 
-        if self.test_metric is None:
-            self.test_metric = ShiftHoldMetric()
-
+        # Extract other metrics
         turn_taking_probs = self.get_next_speaker_probs(
             out["logits_vp"], vad=batch["vad"]
         )
         self.test_metric.update(
-            p_next=turn_taking_probs["next_probs"],
-            vad=batch["vad"],
-            bc_pre_probs=turn_taking_probs["pre_probs"],
+            p=turn_taking_probs["next_probs"],
+            pw=turn_taking_probs.get("pw", None),  # only in discrete
+            pw_top=turn_taking_probs.get("pw_top", None),  # only in discrete
+            pre_probs=turn_taking_probs.get("pre_probs", None),  # only in independent
+            bc_pred_probs=turn_taking_probs.get("bc_prediction", None),
+            events=events,
         )
 
     def test_epoch_end(self, outputs) -> None:
@@ -594,8 +671,8 @@ if __name__ == "__main__":
     DialogAudioDM.print_dm(data_conf, args)
 
     # Model
-    conf = VPModel.load_config()
-    conf["vad_projection"]["regression"] = True
+    conf = VPModel.load_config(path="conv_ssl/config/model_independent.yaml")
+    # conf["vad_projection"]["regression"] = True
     # conf["vad_projection"]["regression"] = True
     # conf["vad_projection"]["comparative"] = True
     # conf["vad_projection"]["bin_times"] = [0.05] * 40
@@ -637,7 +714,11 @@ if __name__ == "__main__":
             if isinstance(v, torch.Tensor):
                 batch[k] = v.to("cuda")
     loss, out, batch = model.shared_step(batch)
-    next_probs, pre_probs = model.get_next_speaker_probs(
-        out["logits_vp"], vad=batch["vad"]
-    )
-    print("next_probs: ", tuple(next_probs.shape))
+    turn_taking_probs = model.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
+    for k, v in turn_taking_probs.items():
+        if isinstance(v, torch.Tensor):
+            print(f"{k}: {tuple(v.shape)}")
+        else:
+            print(f"{k}: {v}")
+
+    probs = out["logits_vp"].sigmoid()

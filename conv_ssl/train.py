@@ -9,15 +9,14 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 from datasets_turntaking import DialogAudioDM
 from conv_ssl.model import VPModel
-from conv_ssl.utils import count_parameters
+from conv_ssl.utils import count_parameters, everything_deterministic
 
 import wandb
 
 PROJECT = "VPModel"
 SAVEDIR = "runs/VPModel"
 
-torch.backends.cudnn.deterministic = True
-torch.use_deterministic_algorithms(mode=True)
+everything_deterministic()
 
 
 class WandbArtifactCallback(pl.Callback):

@@ -45,14 +45,18 @@ vad_projection:
   regression: true
   regression_loss: bce # mse, mae, l1 (same as mae)
   regression_pre_frames: 0
-  comparative: true
+  comparative: false
   vad_threshold: 0.5
   pred_threshold: 0.5
+  event_pre: 0.5
   event_min_context: 1.0
   event_min_duration: 0.15
-  event_horizon: 1.0
+  event_horizon: 2.0
   event_start_pad: 0.05
   event_target_duration: 0.10
+  event_bc_pre_silence: 1.5
+  event_bc_post_silence: 2
+  event_bc_max_active: 1
 
 optimizer:
   alpha: 0.6
