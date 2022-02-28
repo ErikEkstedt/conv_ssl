@@ -99,6 +99,9 @@ def train():
         vad_horizon=data_conf["dataset"]["vad_horizon"],
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
+        train_files=args.train_files,
+        val_files=args.val_files,
+        test_files=args.test_files,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )

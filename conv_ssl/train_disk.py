@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
-from datamodule_disk import DiskDM
+from datamodule_disk import DiskDMFiles
 from conv_ssl.model import VPModel
 from conv_ssl.utils import count_parameters, everything_deterministic
 
@@ -43,18 +43,13 @@ class WandbArtifactCallback(pl.Callback):
 def train():
     parser = ArgumentParser()
     parser = VPModel.add_model_specific_args(parser)
+    parser = DiskDMFiles.add_data_specific_args(parser)
     parser = pl.Trainer.add_argparse_args(parser)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--name_info", type=str, default="")
     parser.add_argument("--project_info", type=str, default="")
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--log_gradients", action="store_true")
-    parser.add_argument("--animation", action="store_true")
-    parser.add_argument("--animation_epoch_start", default=10, type=int)
-    parser.add_argument("--animation_n", default=10, type=int)
-    parser.add_argument("--data_root", default="swb_dataset", type=str)
-    parser.add_argument("--batch_size", default=4, type=int)
-    parser.add_argument("--num_workers", default=cpu_count(), type=int)
     args = parser.parse_args()
     pl.seed_everything(args.seed)
     args.deterministic = True
@@ -77,8 +72,13 @@ def train():
         print()
         print("-" * 60)
 
-    dm = DiskDM(
-        args.data_root, batch_size=args.batch_size, num_workers=args.num_workers
+    dm = DiskDMFiles(
+        args.data_root,
+        train_files=args.train_files,
+        val_files=args.val_files,
+        test_files=args.test_files,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
     )
 
     # Callbacks & Logger
