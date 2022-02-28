@@ -6,6 +6,34 @@ from tqdm import tqdm
 import torch
 from datasets_turntaking import DialogAudioDM
 
+from conv_ssl.utils import write_json
+
+
+def save_samples(dm, root, max_batches=-1):
+    makedirs(root, exist_ok=True)
+    file_map = {}
+    for dloader in [dm.val_dataloader(), dm.train_dataloader()]:
+        for ii, batch in enumerate(dloader):
+            if max_batches > 0 and ii == max_batches:
+                break
+            batch_size = batch["waveform"].shape[0]
+            for i in range(batch_size):
+                session = batch["session"][i]
+                if session not in file_map:
+                    file_map[session] = -1
+                file_map[session] += 1
+                n = file_map[session]
+                sample = {
+                    "waveform": batch["waveform"][i],
+                    "vad": batch["vad"][i],
+                    "vad_history": batch["vad_history"][i],
+                    "dset_name": batch["dset_name"][i],
+                    "session": batch["session"][i],
+                }
+                name = f"{session}_{n}.pt"
+                torch.save(sample, join(root, name))
+    write_json(file_map, join(root, "file_map.json"))
+
 
 if __name__ == "__main__":
 
@@ -23,8 +51,6 @@ if __name__ == "__main__":
         print(f"{k}: {v}")
 
     data_conf = DialogAudioDM.load_config()
-    data_conf["dataset"]["vad_hz"] = args.hz
-    data_conf["dataset"]["vad_bin_times"] = [0.2, 0.4, 0.6, 0.8]
     DialogAudioDM.print_dm(data_conf, args)
     dm = DialogAudioDM(
         datasets=data_conf["dataset"]["datasets"],
@@ -33,8 +59,8 @@ if __name__ == "__main__":
         audio_normalize=data_conf["dataset"]["audio_normalize"],
         audio_overlap=data_conf["dataset"]["audio_overlap"],
         sample_rate=data_conf["dataset"]["sample_rate"],
-        vad_hz=data_conf["dataset"]["vad_hz"],
-        vad_bin_times=data_conf["dataset"]["vad_bin_times"],
+        vad_hz=100,
+        vad_horizon=2,
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
         batch_size=args.batch_size,
@@ -43,50 +69,4 @@ if __name__ == "__main__":
     dm.prepare_data()
     dm.setup()
 
-    makedirs(args.dirpath, exist_ok=True)
-    makedirs(join(args.dirpath, "train"), exist_ok=True)
-
-    if args.max_batches > 0:
-        pbar = tqdm(dm.train_dataloader(), total=args.max_batches)
-    else:
-        pbar = tqdm(dm.train_dataloader())
-    n = 0
-    for n_batch, batch in enumerate(pbar):
-        batch_size = batch["waveform"].shape[0]
-        if args.max_batches > 0 and n_batch >= args.max_batches:
-            break
-        for i in range(batch_size):
-            sample = {
-                "waveform": batch["waveform"][i],
-                "vad": batch["vad"][i],
-                "vad_history": batch["vad_history"][i],
-                "dset_name": batch["dset_name"][i],
-                "session": batch["session"][i],
-            }
-            torch.save(sample, join(args.dirpath, "train", f"d_{str(n).zfill(6)}.pt"))
-            n += 1
-
-    ################################################################
-    # Validation
-    split = "val"
-    makedirs(join(args.dirpath, split), exist_ok=True)
-
-    if args.max_batches > 0:
-        pbar = tqdm(dm.val_dataloader(), total=args.max_batches)
-    else:
-        pbar = tqdm(dm.val_dataloader())
-    n = 0
-    for n_batch, batch in enumerate(pbar):
-        batch_size = batch["waveform"].shape[0]
-        if args.max_batches > 0 and n_batch >= args.max_batches:
-            break
-        for i in range(batch_size):
-            sample = {
-                "waveform": batch["waveform"][i],
-                "vad": batch["vad"][i],
-                "vad_history": batch["vad_history"][i],
-                "dset_name": batch["dset_name"][i],
-                "session": batch["session"][i],
-            }
-            torch.save(sample, join(args.dirpath, split, f"d_{str(n).zfill(6)}.pt"))
-            n += 1
+    save_samples(dm, args.dirpath, max_batches=args.max_batches)
