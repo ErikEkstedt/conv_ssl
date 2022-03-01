@@ -40,7 +40,6 @@ vad_cond:
   vad_history: true
   vad_history_bins: 5
 
-
 vad_projection:
   bin_times: [.2, .4, .6, .8]
   regression: true
@@ -58,7 +57,7 @@ vad_projection:
   event_bc_pre_silence: 1.5
   event_bc_post_silence: 2
   event_bc_max_active: 1
-
+  event_bc_prediction_window: 0.5
 
 optimizer:
   alpha: 0.6
