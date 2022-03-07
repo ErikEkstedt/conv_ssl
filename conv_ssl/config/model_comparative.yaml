@@ -54,7 +54,7 @@ vad_projection:
   event_horizon: 2.0
   event_start_pad: 0.05
   event_target_duration: 0.10
-  event_bc_pre_silence: 1.5
+  event_bc_pre_silence: 1
   event_bc_post_silence: 2
   event_bc_max_active: 1
   event_bc_prediction_window: 0.5
