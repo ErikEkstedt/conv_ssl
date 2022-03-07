@@ -603,6 +603,7 @@ class VPModel(VadProjectionTask):
     def test_step(self, batch, batch_idx, **kwargs):
         if self.test_metric is None:
             self.test_metric = self.init_metric(self.conf, self.frame_hz)
+            self.test_metric.to(self.device)
 
         # extract events for metrics (use full vad including horizon)
         events = self.test_metric.extract_events(batch["vad"])
