@@ -6,7 +6,9 @@ import wandb
 import matplotlib.pyplot as plt
 import pandas as pd
 import scipy.stats as stats
+import pytorch_lightning as pl
 
+from conv_ssl.utils import everything_deterministic
 from conv_ssl.evaluation.utils import load_model, load_dm
 from conv_ssl.evaluation.evaluation import test
 
@@ -106,6 +108,20 @@ def extract_metrics(
 def test_models(id_dict, project_id="how_so/VPModel"):
     project_id = "how_so/VPModel"
 
+    # update vad_projection metrics
+    update = {
+        "event_pre": 0.5,
+        "event_min_context": 1.0,
+        "event_min_duration": 0.15,
+        "event_horizon": 2.0,
+        "event_start_pad": 0.05,
+        "event_target_duration": 0.10,
+        "event_bc_pre_silence": 1,
+        "event_bc_post_silence": 2,
+        "event_bc_max_active": 1,
+        "event_bc_prediction_window": 0.5,
+    }
+
     all_data = {}
     all_result = {}
     for kfold, id in id_dict.items():
@@ -117,6 +133,11 @@ def test_models(id_dict, project_id="how_so/VPModel"):
         # Load data (same across folds)
         dm = load_dm(vad_hz=100, horizon=2, batch_size=16, num_workers=4)
         model = load_model(run_path=run_path, eval=True)
+        # update metrics
+        for metric, val in update.items():
+            model.conf["vad_projection"][metric] = val
+        model.test_metric = model.init_metric(model.conf, model.frame_hz)
+        model.test_metric = model.test_metric.to(model.device)
         result = test(model, dm, online=False)
         all_data[kfold] = result
         # add results
@@ -128,9 +149,69 @@ def test_models(id_dict, project_id="how_so/VPModel"):
     return all_result, all_data
 
 
+def plot_result_histogram(fig_data, plot=True):
+    off = -1.5
+    pad = 0.30
+    w = pad - 0.02
+    xx = torch.arange(len(metrics))
+    colors = ["b", "orange", "red", "green"]
+    fig, ax = plt.subplots(1, 1, figsize=(12, 4))
+    for i, (model, result) in enumerate(fig_data.items()):
+        for xi, metric in enumerate(metrics):
+            x_tmp = xx[xi] + (off * pad)
+            if xi == 0:
+                label = model
+            else:
+                label = None
+            ax.bar(
+                x=x_tmp,
+                height=result[metric]["mean"],
+                yerr=result[metric]["std"],
+                alpha=0.5,
+                color=colors[i],
+                capsize=5,
+                width=w,
+                label=label,
+            )
+        off += 1
+    ax.legend(loc="upper right")
+    ax.set_ylim([0.77, 0.9])
+    ax.set_xticks(list(range(len(metrics))))
+    ax.set_xticklabels(metrics)
+    if plot:
+        plt.pause(0.01)
+    return fig, ax
+
+
 def data_ready():
-    all_result = torch.load("all_result_discrete.pt")
-    all_data = torch.load("all_data_discrete.pt")
+    data = {
+        "discrete": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_result_discrete.pt").items()
+        },
+        "independent": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_result_independent.pt").items()
+        },
+    }
+
+    metrics = ["f1_weighted", "f1_pre_weighted", "bc_ongoing"]
+    fig_data = {}
+    for model, results in data.items():
+        fig_data[model] = {}
+        for metric in metrics:
+            x = torch.tensor(data[model][metric])
+            fig_data[model][metric] = {"mean": x.mean(), "std": x.std()}
+
+    fig, ax = plot_result_histogram(fig_data, plot=True)
+
+    for metric in metrics:
+        for model in fig_data.keys():
+            m = round(fig_data[model][metric]["mean"].item(), 4)
+            s = round(fig_data[model][metric]["std"].item(), 4)
+            print(f"{model}: {m} ({s})")
+
+    ax.bar(x=xx, y=fig_data[model][metric]["mean"], yerr=fig_data[model][metric]["std"])
 
     for metric, val in all_result.items():
         val = torch.tensor(val)
@@ -178,39 +259,109 @@ def data_ready():
     plt.show()
 
 
+def debugging():
+    from conv_ssl.utils import to_device
+
+    project_id = "how_so/VPModel"
+    id = "sbzhz86n"  # discrete
+    id = "10krujrj"  # independent
+    run_path = join(project_id, id)
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=4, num_workers=4)
+    model = load_model(run_path=run_path, eval=True)
+    update = {
+        "event_pre": 0.5,
+        "event_min_context": 1.0,
+        "event_min_duration": 0.15,
+        "event_horizon": 2.0,
+        "event_start_pad": 0.05,
+        "event_target_duration": 0.10,
+        "event_bc_pre_silence": 1,
+        "event_bc_post_silence": 2,
+        "event_bc_max_active": 1,
+        "event_bc_prediction_window": 0.5,
+    }
+    for metric, val in update.items():
+        model.conf["vad_projection"][metric] = val
+    model.test_metric = model.init_metric(model.conf, model.frame_hz)
+    model.test_metric = model.test_metric.to(model.device)
+
+    max_batches = 100
+    model.test_metric.reset()
+    if max_batches > 0:
+        pbar = tqdm(enumerate(dm.val_dataloader()), total=max_batches)
+    else:
+        dloader = dm.val_dataloader()
+        pbar = tqdm(enumerate(dloader), total=len(dloader))
+    for i, batch in pbar:
+        batch = to_device(batch)
+        # EVENTS
+        events = model.test_metric.extract_events(batch["vad"])
+        # FORWARD
+        _, out, batch = model.shared_step(batch)
+        # get probs for zero-shot
+        probs = model.get_next_speaker_probs(out["logits_vp"], batch["vad"])
+        # UPDATE METRICS
+        model.test_metric.update(
+            p=probs["p"],
+            pre_probs=probs.get("pre_probs", None),
+            pw=probs.get("pw", None),
+            bc_pred_probs=probs.get("bc_prediction", None),
+            events=events,
+        )
+        if max_batches > 0 and i == max_batches:
+            break
+    result = model.test_metric.compute()
+
+    result_ind = torch.load("tmp_ind.pt")
+
+    torch.save(result, "tmp_ind.pt")
+
+    result_discrete = result
+
+
 if __name__ == "__main__":
 
     # run is specified by <entity>/<project>/<run_id>
-    project_id = "how_so/VPModelDiscrete"
-
+    # project_id = "how_so/VPModelDiscrete"
     # metrics = ['loss_vp', 'val_loss', 'val_f1_weighted', 'val_f1_pre_weighted', 'val_f1_pw', 'val_bc_prediction']
-    metrics = [
-        "val_f1_weighted",
-        "val_f1_pre_weighted",
-        "val_f1_pw",
-        "val_bc_ongoing",
-        "val_bc_prediction",
-    ]
+    # metrics = [
+    #     "val_f1_weighted",
+    #     "val_f1_pre_weighted",
+    #     "val_f1_pw",
+    #     "val_bc_ongoing",
+    #     "val_bc_prediction",
+    # ]
     # data = extract_metrics(discrete, metrics=metrics)
+    # data = extract_metrics(independent, metrics=metrics, project_id="how_so/VPModel")
+    # n_fig = len(metrics)
+    # fig, ax = plt.subplots(n_fig, 1, sharex=True)
+    # for kfold, tmp_data in data.items():
+    #     for i, (metric, (x, y)) in enumerate(tmp_data.items()):
+    #         ax[i].plot(x, y)
+    #         # ax[i].plot(x, y, label=metric)
+    #         # ax[i].legend()
+    # for i, _ in enumerate(tmp_data.items()):
+    #     ax[i].set_ylabel(metrics[i])
+    #     ax[i].set_xlabel("step")
+    # plt.show()
 
-    data = extract_metrics(independent, metrics=metrics, project_id="how_so/VPModel")
+    pl.seed_everything(100)
+    everything_deterministic()
 
-    n_fig = len(metrics)
-    fig, ax = plt.subplots(n_fig, 1, sharex=True)
-    for kfold, tmp_data in data.items():
-        for i, (metric, (x, y)) in enumerate(tmp_data.items()):
-            ax[i].plot(x, y)
-            # ax[i].plot(x, y, label=metric)
-            # ax[i].legend()
-    for i, _ in enumerate(tmp_data.items()):
-        ax[i].set_ylabel(metrics[i])
-        ax[i].set_xlabel("step")
-    plt.show()
-
-    # all_result, all_data = test_models(discrete)
-    # torch.save(all_result, "all_result_discrete.pt")
-    # torch.save(all_data, "all_data_discrete.pt")
+    all_result, all_data = test_models(discrete, project_id="how_so/VPModel")
+    torch.save(all_result, "all_result_discrete.pt")
+    torch.save(all_data, "all_data_discrete.pt")
 
     all_result, all_data = test_models(independent, project_id="how_so/VPModel")
     torch.save(all_result, "all_result_independent.pt")
     torch.save(all_data, "all_data_independent.pt")
+
+    all_result, all_data = test_models(
+        independent_baseline, project_id="how_so/VPModel"
+    )
+    torch.save(all_result, "all_result_ind_base.pt")
+    torch.save(all_data, "all_data_ind_base.pt")
+
+    all_result, all_data = test_models(comparative, project_id="how_so/VPModel")
+    torch.save(all_result, "all_result_comp.pt")
+    torch.save(all_data, "all_data_comp.pt")

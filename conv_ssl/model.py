@@ -10,7 +10,11 @@ from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
 from vad_turn_taking.vad import VAD
 from vad_turn_taking.metrics import TurnTakingMetrics
-from vad_turn_taking.vad_projection import VadLabel, ProjectionCodebook
+from vad_turn_taking.vad_projection import (
+    VadLabel,
+    ProjectionCodebook,
+    independent_bc_prediction,
+)
 
 
 class VadCondition(nn.Module):
@@ -207,92 +211,22 @@ class ProjectionModel(nn.Module):
 
 
 class VadProjectionTask(pl.LightningModule):
-    def _normalize_reg_probs(self, probs):
-        probs = probs.sum(dim=-1)
-        tot = probs.sum(dim=-1, keepdim=True)
-        # renormalize for comparison
-        probs = probs / tot
-        return probs
-
-    def _discrete_comparative(self, probs):
-        """
-        Get the comparative score for each class `codebook.comparative_probabilities`
-        and scale them with their associated probabilities to get a final estimate of who the
-        "winner" should be, or more precicely their new weighted probability scores.
-
-        i.e. batch 0, step 10 ->  p_a: 0.65 p_b: 0.35 etc etc
-        """
-        comparative_probs = self.projection_codebook.comparative_probabilities.to(
-            probs.device
-        )
-        pw = comparative_probs.unsqueeze(0) * probs.unsqueeze(-1)  # (N, n_classes, 2)
-        pw = pw.sum(dim=-2)  # (N, 2)
-        return pw
-
-    def _discrete_topk_comparative(self, probs, k=5):
-        comparative_probs = self.projection_codebook.comparative_probabilities.to(
-            probs.device
-        )
-
-        # select topk-idx and associated probabilities
-        p_topk, idx = probs.topk(k)
-        c = comparative_probs[idx]
-
-        pw_top = c * p_topk.unsqueeze(-1)  # (B, N, n_classes, 2)
-        pw_top = pw_top.sum(dim=-2)  # (B, N, 2)
-
-        # renormalize
-        pw_top = pw_top / pw_top.sum(dim=-1, keepdim=True)  # (B, N, 2)
-        return pw_top
-
-    def _discrete_bc_prediction(self, probs):
-        """Backchannel prediction task"""
-        # combine probabilities associated with future backchannel from A/B
-        bc_idx = self.projection_codebook.bc_active  # prediction
-        ap = probs[..., bc_idx[0]].sum(-1)
-        bp = probs[..., bc_idx[1]].sum(-1)
-        return torch.stack((ap, bp), dim=-1)
-
-    def _independent_bc_prediction(self, probs):
-        """Backchannel prediction task"""
-
-        p_bc_a = probs[..., 0, self.pre_frames : -1]
-        p_bc_b = probs[..., 1, self.pre_frames : -1]
-
-        # probs.shape: (B, N, 2, M)
-        raise NotImplementedError("independent BC prediction is not defined")
-
-    def next_speaker_probs_discrete(self, logits, vad):
-        """
-        Probabilities for turn-taking task given the DISCRETE model
-        """
-        # Compare chosen subset of next-speaker-activity
-        next_probs = self.projection_codebook.get_next_speaker_probs(logits, vad)
-
-        probs = logits.softmax(dim=-1)
-        # weighted average of comparative-activity
-        pw = self._discrete_comparative(probs)
-        # topk weighted average of comparative-activity
-        pw_topk = self._discrete_topk_comparative(probs, k=5)
-        # Backchannel prediction
-        bc_pred = self._discrete_bc_prediction(probs)
-        return {
-            "next_probs": next_probs,
-            "pw": pw,
-            "pw_topk": pw_topk,
-            "bc_prediction": bc_pred,
-        }
-
     def next_speaker_probs_independent(self, logits):
-        """
-        Probabilities for turn-taking task given the INDEPENDENT model
-        """
+        """Probabilities for turn-taking task given the INDEPENDENT model"""
+
+        def _normalize_reg_probs(probs):
+            probs = probs.sum(dim=-1)
+            tot = probs.sum(dim=-1, keepdim=True)
+            # renormalize for comparison
+            probs = probs / tot
+            return probs
+
         # Compare chosen subset of next-speaker-activity
         probs = logits.sigmoid()
-        next_probs = self._normalize_reg_probs(probs)
-        pre_probs = self._normalize_reg_probs(probs[..., :, self.pre_frames :])
-        # bc_prediction = self._independent_bc_prediction(probs)
-        return {"next_probs": next_probs, "pre_probs": pre_probs, "bc_prediction": None}
+        next_probs = _normalize_reg_probs(probs)
+        pre_probs = _normalize_reg_probs(probs[..., :, self.pre_frames :])
+        bc_prediction = independent_bc_prediction(probs, bc_activity_threshold=0.1)
+        return {"p": next_probs, "pre_probs": pre_probs, "bc_prediction": bc_prediction}
 
     def next_speaker_probs_comparative(self, logits):
         """
@@ -300,18 +234,17 @@ class VadProjectionTask(pl.LightningModule):
         """
         probs = logits.sigmoid()
         next_probs = torch.cat((probs, 1 - probs), dim=-1)
-        return {"next_probs": next_probs}
+        return {"p": next_probs, "pre_probs": next_probs}
 
     def get_next_speaker_probs(self, logits, vad=None):
-        out = {"pre_probs": None}
         if self.regression:
             if self.conf["vad_projection"]["comparative"]:
-                o = self.next_speaker_probs_comparative(logits)
+                out = self.next_speaker_probs_comparative(logits)
             else:
-                o = self.next_speaker_probs_independent(logits)
+                out = self.next_speaker_probs_independent(logits)
         else:
-            o = self.next_speaker_probs_discrete(logits, vad)
-        out.update(o)
+            out = self.projection_codebook.get_probs(logits, vad)
+            out["pre_probs"] = None
         return out
 
 
