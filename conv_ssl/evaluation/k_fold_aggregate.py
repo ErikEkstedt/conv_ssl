@@ -109,11 +109,11 @@ def test_models(id_dict, project_id="how_so/VPModel"):
     project_id = "how_so/VPModel"
 
     # update vad_projection metrics
-    update = {
+    metric_kwargs = {
         "event_pre": 0.5,
         "event_min_context": 1.0,
         "event_min_duration": 0.15,
-        "event_horizon": 2.0,
+        "event_horizon": 1.0,
         "event_start_pad": 0.05,
         "event_target_duration": 0.10,
         "event_bc_pre_silence": 1,
@@ -133,8 +133,8 @@ def test_models(id_dict, project_id="how_so/VPModel"):
         # Load data (same across folds)
         dm = load_dm(vad_hz=100, horizon=2, batch_size=16, num_workers=4)
         model = load_model(run_path=run_path, eval=True)
-        # update metrics
-        for metric, val in update.items():
+        # metric_kwargs metrics
+        for metric, val in metric_kwargs.items():
             model.conf["vad_projection"][metric] = val
         model.test_metric = model.init_metric(model.conf, model.frame_hz)
         model.test_metric = model.test_metric.to(model.device)
@@ -264,15 +264,15 @@ def debugging():
 
     project_id = "how_so/VPModel"
     id = "sbzhz86n"  # discrete
-    id = "10krujrj"  # independent
+    # id = "10krujrj"  # independent
     run_path = join(project_id, id)
     dm = load_dm(vad_hz=100, horizon=2, batch_size=4, num_workers=4)
     model = load_model(run_path=run_path, eval=True)
-    update = {
+    metric_kwargs = {
         "event_pre": 0.5,
-        "event_min_context": 1.0,
+        "event_min_context": 1.0,  # min context
+        "event_horizon": 1.0,  # lookahead after shift/holds
         "event_min_duration": 0.15,
-        "event_horizon": 2.0,
         "event_start_pad": 0.05,
         "event_target_duration": 0.10,
         "event_bc_pre_silence": 1,
@@ -280,12 +280,12 @@ def debugging():
         "event_bc_max_active": 1,
         "event_bc_prediction_window": 0.5,
     }
-    for metric, val in update.items():
+    for metric, val in metric_kwargs.items():
         model.conf["vad_projection"][metric] = val
     model.test_metric = model.init_metric(model.conf, model.frame_hz)
     model.test_metric = model.test_metric.to(model.device)
 
-    max_batches = 100
+    max_batches = 1000
     model.test_metric.reset()
     if max_batches > 0:
         pbar = tqdm(enumerate(dm.val_dataloader()), total=max_batches)
@@ -311,10 +311,10 @@ def debugging():
         if max_batches > 0 and i == max_batches:
             break
     result = model.test_metric.compute()
+    # torch.save(result, "tmp_ind.pt")
+    torch.save(result, "tmp_discrete.pt")
 
     result_ind = torch.load("tmp_ind.pt")
-
-    torch.save(result, "tmp_ind.pt")
 
     result_discrete = result
 
