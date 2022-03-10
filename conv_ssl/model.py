@@ -510,9 +510,8 @@ class VPModel(VadProjectionTask):
             out["logits_vp"], vad=batch["vad"]
         )
         self.val_metric.update(
-            p=turn_taking_probs["next_probs"],
+            p=turn_taking_probs["p"],
             pw=turn_taking_probs.get("pw", None),  # only in discrete
-            pw_top=turn_taking_probs.get("pw_top", None),  # only in discrete
             pre_probs=turn_taking_probs.get("pre_probs", None),  # only in independent
             bc_pred_probs=turn_taking_probs.get("bc_prediction", None),
             events=events,
@@ -556,9 +555,8 @@ class VPModel(VadProjectionTask):
             out["logits_vp"], vad=batch["vad"]
         )
         self.test_metric.update(
-            p=turn_taking_probs["next_probs"],
+            p=turn_taking_probs["p"],
             pw=turn_taking_probs.get("pw", None),  # only in discrete
-            pw_top=turn_taking_probs.get("pw_top", None),  # only in discrete
             pre_probs=turn_taking_probs.get("pre_probs", None),  # only in independent
             bc_pred_probs=turn_taking_probs.get("bc_prediction", None),
             events=events,
