@@ -62,10 +62,10 @@ def load_metadata(run_path):
     return run
 
 
-def load_model(checkpoint_path=None, run_path=None, eval=True, **kwargs):
+def load_model(checkpoint_path=None, run_path=None, eval=True, strict=True, **kwargs):
     if checkpoint_path is None:
         checkpoint_path = get_checkpoint(run_path=run_path, **kwargs)
-    model = VPModel.load_from_checkpoint(checkpoint_path)
+    model = VPModel.load_from_checkpoint(checkpoint_path, strict=strict)
     if torch.cuda.is_available():
         model = model.to("cuda")
 

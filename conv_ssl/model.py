@@ -225,7 +225,12 @@ class VadProjectionTask(pl.LightningModule):
         probs = logits.sigmoid()
         next_probs = _normalize_reg_probs(probs)
         pre_probs = _normalize_reg_probs(probs[..., :, self.pre_frames :])
-        bc_prediction = independent_bc_prediction(probs, bc_activity_threshold=0.1)
+        bc_prediction = independent_bc_prediction(
+            probs,
+            bc_activity_threshold=self.conf["vad_projection"][
+                "event_bc_pred_threshold"
+            ],
+        )
         return {"p": next_probs, "pre_probs": pre_probs, "bc_prediction": bc_prediction}
 
     def next_speaker_probs_comparative(self, logits):
@@ -270,7 +275,7 @@ class VPModel(VadProjectionTask):
         self.conf = conf
 
         # Metrics
-        self.val_metric = self.init_metric(conf, frame_hz=self.frame_hz)
+        self.val_metric = None  # self.init_metric(conf, frame_hz=self.frame_hz)
         self.test_metric = None  # set in test if necessary
 
         # NOTE: Unused?
@@ -305,7 +310,7 @@ class VPModel(VadProjectionTask):
         self.weight_decay = conf["optimizer"]["weight_decay"]
         self.save_hyperparameters()
 
-    def init_metric(self, conf, frame_hz):
+    def init_metric(self, conf, frame_hz, bc_pred_pr_curve=False):
         return TurnTakingMetrics(
             # don't extract events before a certain context is known
             min_context=conf["vad_projection"]["event_min_context"],
@@ -327,6 +332,10 @@ class VPModel(VadProjectionTask):
             bc_max_active=conf["vad_projection"]["event_bc_max_active"],
             # The amount of time prior a backchannel to infer bc-prediciton stats
             bc_prediction_window=conf["vad_projection"]["event_bc_prediction_window"],
+            threshold=0.5,  # f1 threshold
+            threshold_bc_ongoing=conf["vad_projection"]["event_bc_ongoing_threshold"],
+            threshold_bc_pred=conf["vad_projection"]["event_bc_pred_threshold"],
+            bc_pred_pr_curve=bc_pred_pr_curve,
             discrete=not conf["vad_projection"]["regression"],  # discrete model or not
         )
 
@@ -491,6 +500,9 @@ class VPModel(VadProjectionTask):
 
     def validation_step(self, batch, batch_idx, **kwargs):
         """validation step"""
+        if self.val_metric is None:
+            self.val_metric = self.init_metric(self.conf, self.frame_hz)
+            self.val_metric.to(self.device)
 
         # extract events for metrics (use full vad including horizon)
         events = self.val_metric.extract_events(batch["vad"])
@@ -517,12 +529,24 @@ class VPModel(VadProjectionTask):
             events=events,
         )
 
+    def on_test_epoch_start(self):
+        if self.test_metric is not None:
+            self.test_metric.reset()
+
+    def on_validation_epoch_start(self):
+        if self.val_metric is not None:
+            self.val_metric.reset()
+
     def validation_epoch_end(self, outputs) -> None:
         r = self.val_metric.compute()
         for metric_name, values in r.items():
+            if metric_name in ["pr_curve_bc_pred"]:
+                continue
             if isinstance(values, dict):
                 for val_name, val in values.items():
                     if val_name in ["tp", "tn", "fp", "fn"]:
+                        continue
+                    if val_name in ["pr_curve_bc_pred"]:
                         continue
                     if "support" in val_name:
                         continue
@@ -530,7 +554,6 @@ class VPModel(VadProjectionTask):
                     self.log(f"val_{metric_name}_{val_name}", val)
             else:
                 self.log(f"val_{metric_name}", values)
-        self.val_metric.reset()
 
     def test_step(self, batch, batch_idx, **kwargs):
         if self.test_metric is None:
@@ -565,13 +588,15 @@ class VPModel(VadProjectionTask):
     def test_epoch_end(self, outputs) -> None:
         r = self.test_metric.compute()
         for metric_name, values in r.items():
+            if metric_name in ["pr_curve_bc_pred"]:
+                continue
             if isinstance(values, dict):
                 for val_name, val in values.items():
-                    if not val_name in ["tp", "tn", "fp", "fn"]:
-                        self.log(f"test/{metric_name}_{val_name}", val)
+                    if val_name in ["tp", "tn", "fp", "fn"]:
+                        continue
+                    self.log(f"test/{metric_name}_{val_name}", val)
             else:
                 self.log(f"test/{metric_name}", values)
-        self.test_metric.reset()
 
     @staticmethod
     def add_model_specific_args(parent_parser):

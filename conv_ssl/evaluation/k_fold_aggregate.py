@@ -37,7 +37,8 @@ discrete = {
 }
 
 independent = {
-    "0": "1t7vvo0c",
+    # "0": "1t7vvo0c",
+    "0": None,
     "1": "24bn5wi6",
     "2": "1u7yzji0",
     "3": "s5unjaj7",
@@ -51,17 +52,18 @@ independent = {
 }
 
 independent_baseline = {
+    # "0": "2mme28tm",
     "0": None,
-    "1": None,
-    "2": None,
-    "3": None,
-    "4": None,
-    "5": None,
-    "6": None,
-    "7": None,
-    "8": None,
-    "9": None,
-    "10": None,
+    "1": "qo9mf26t",
+    "2": "2rrdm5ma",
+    "3": "mrzizwex",
+    "4": "1lximsk1",
+    "5": "2wyymo7n",
+    "6": "1nze8m3l",
+    "7": "1cdhj9yo",
+    "8": "kamzjel0",
+    "9": "15ze1p0y",
+    "10": "2mvwxxar",
 }
 
 comparative = {
@@ -105,23 +107,26 @@ def extract_metrics(
     return data
 
 
-def test_models(id_dict, project_id="how_so/VPModel"):
-    project_id = "how_so/VPModel"
+def test_single_model(run_path, metric_kwargs, bc_pred_pr_curve=False):
+    # Load data (same across folds)
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=16, num_workers=4)
 
-    # update vad_projection metrics
-    metric_kwargs = {
-        "event_pre": 0.5,
-        "event_min_context": 1.0,
-        "event_min_duration": 0.15,
-        "event_horizon": 1.0,
-        "event_start_pad": 0.05,
-        "event_target_duration": 0.10,
-        "event_bc_pre_silence": 1,
-        "event_bc_post_silence": 2,
-        "event_bc_max_active": 1,
-        "event_bc_prediction_window": 0.5,
-    }
+    # Load model and process test-set
+    model = load_model(run_path=run_path, eval=True, strict=False)
 
+    # Updatemetric_kwargs metrics
+    for metric, val in metric_kwargs.items():
+        model.conf["vad_projection"][metric] = val
+
+    model.test_metric = model.init_metric(
+        model.conf, model.frame_hz, bc_pred_pr_curve=bc_pred_pr_curve
+    )
+    model.test_metric = model.test_metric.to(model.device)
+    result = test(model, dm, online=False)
+    return result, model
+
+
+def test_models(id_dict, metric_kwargs, project_id="how_so/VPModel"):
     all_data = {}
     all_result = {}
     for kfold, id in id_dict.items():
@@ -129,16 +134,7 @@ def test_models(id_dict, project_id="how_so/VPModel"):
             continue
         run_path = join(project_id, id)
         print(f"{kfold} run_path: ", run_path)
-        # Load model and process test-set
-        # Load data (same across folds)
-        dm = load_dm(vad_hz=100, horizon=2, batch_size=16, num_workers=4)
-        model = load_model(run_path=run_path, eval=True)
-        # metric_kwargs metrics
-        for metric, val in metric_kwargs.items():
-            model.conf["vad_projection"][metric] = val
-        model.test_metric = model.init_metric(model.conf, model.frame_hz)
-        model.test_metric = model.test_metric.to(model.device)
-        result = test(model, dm, online=False)
+        result, _ = test_single_model(run_path, metric_kwargs)
         all_data[kfold] = result
         # add results
         for metric, value in result[0].items():
@@ -149,7 +145,7 @@ def test_models(id_dict, project_id="how_so/VPModel"):
     return all_result, all_data
 
 
-def plot_result_histogram(fig_data, plot=True):
+def plot_result_histogram(fig_data, ylim=None, plot=True):
     off = -1.5
     pad = 0.30
     w = pad - 0.02
@@ -175,7 +171,9 @@ def plot_result_histogram(fig_data, plot=True):
             )
         off += 1
     ax.legend(loc="upper right")
-    ax.set_ylim([0.77, 0.9])
+    if ylim is not None:
+        # ax.set_ylim([0.73, 0.9])
+        ax.set_ylim(ylim)
     ax.set_xticks(list(range(len(metrics))))
     ax.set_xticklabels(metrics)
     if plot:
@@ -193,26 +191,28 @@ def data_ready():
             k.replace("test/", ""): v
             for k, v in torch.load("all_result_independent.pt").items()
         },
+        "independent_baseline": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_result_ind_base.pt").items()
+        },
     }
 
-    metrics = ["f1_weighted", "f1_pre_weighted", "bc_ongoing"]
+    metrics = ["f1_weighted", "f1_pre_weighted", "f1_bc_ongoing", "bc_prediction"]
     fig_data = {}
     for model, results in data.items():
         fig_data[model] = {}
         for metric in metrics:
             x = torch.tensor(data[model][metric])
-            fig_data[model][metric] = {"mean": x.mean(), "std": x.std()}
-
-    fig, ax = plot_result_histogram(fig_data, plot=True)
+            fig_data[model][metric] = {"mean": x.mean(), "std": x.std(unbiased=True)}
+    fig, ax = plot_result_histogram(fig_data, plot=False)
+    plt.show()
 
     for metric in metrics:
         for model in fig_data.keys():
             m = round(fig_data[model][metric]["mean"].item(), 4)
             s = round(fig_data[model][metric]["std"].item(), 4)
             print(f"{model}: {m} ({s})")
-
     ax.bar(x=xx, y=fig_data[model][metric]["mean"], yerr=fig_data[model][metric]["std"])
-
     for metric, val in all_result.items():
         val = torch.tensor(val)
         m = round(val.mean().item(), 3)
@@ -266,26 +266,38 @@ def debugging():
     id = "sbzhz86n"  # discrete
     # id = "10krujrj"  # independent
     run_path = join(project_id, id)
-    dm = load_dm(vad_hz=100, horizon=2, batch_size=4, num_workers=4)
-    model = load_model(run_path=run_path, eval=True)
+
+    # update vad_projection metrics
     metric_kwargs = {
-        "event_pre": 0.5,
-        "event_min_context": 1.0,  # min context
-        "event_horizon": 1.0,  # lookahead after shift/holds
-        "event_min_duration": 0.15,
-        "event_start_pad": 0.05,
-        "event_target_duration": 0.10,
-        "event_bc_pre_silence": 1,
+        "event_pre": 0.5,  # seconds used to estimate PRE-f1-SHIFT/HOLD
+        "event_min_context": 1.0,  # min context duration before extracting metrics
+        "event_min_duration": 0.15,  # the minimum required segment to extract SHIFT/HOLD (start_pad+target_duration)
+        "event_horizon": 1.0,  # SHIFT/HOLD requires lookahead to determine mutual starts etc
+        "event_start_pad": 0.05,  # Predict SHIFT/HOLD after this many seconds of silence after last speaker
+        "event_target_duration": 0.10,  # duration of segment to extract each SHIFT/HOLD guess
+        "event_bc_target_duration": 0.25,  # duration of activity, in a backchannel, to extract BC-ONGOING metrics
+        "event_bc_pre_silence": 1,  # du
         "event_bc_post_silence": 2,
-        "event_bc_max_active": 1,
-        "event_bc_prediction_window": 0.5,
+        "event_bc_max_active": 1.0,
+        "event_bc_prediction_window": 0.4,
+        "event_bc_neg_active": 1,
+        "event_bc_neg_prefix": 1,
+        "event_bc_ongoing_threshold": 0.5,
+        "event_bc_pred_threshold": 0.5,  # this should be varied
     }
+    run_path = "how_so/VPModel/sbzhz86n"  # discrete
+    # run_path ="how_so/VPModel/10krujrj"  # independent
+
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=4, num_workers=4)
+    model = load_model(run_path=run_path, eval=True, strict=False)
     for metric, val in metric_kwargs.items():
         model.conf["vad_projection"][metric] = val
-    model.test_metric = model.init_metric(model.conf, model.frame_hz)
+    model.test_metric = model.init_metric(
+        model.conf, model.frame_hz, bc_pred_pr_curve=True
+    )
     model.test_metric = model.test_metric.to(model.device)
 
-    max_batches = 1000
+    max_batches = 100
     model.test_metric.reset()
     if max_batches > 0:
         pbar = tqdm(enumerate(dm.val_dataloader()), total=max_batches)
@@ -311,6 +323,7 @@ def debugging():
         if max_batches > 0 and i == max_batches:
             break
     result = model.test_metric.compute()
+
     # torch.save(result, "tmp_ind.pt")
     torch.save(result, "tmp_discrete.pt")
 
@@ -321,47 +334,121 @@ def debugging():
 
 if __name__ == "__main__":
 
-    # run is specified by <entity>/<project>/<run_id>
-    # project_id = "how_so/VPModelDiscrete"
-    # metrics = ['loss_vp', 'val_loss', 'val_f1_weighted', 'val_f1_pre_weighted', 'val_f1_pw', 'val_bc_prediction']
-    # metrics = [
-    #     "val_f1_weighted",
-    #     "val_f1_pre_weighted",
-    #     "val_f1_pw",
-    #     "val_bc_ongoing",
-    #     "val_bc_prediction",
-    # ]
-    # data = extract_metrics(discrete, metrics=metrics)
-    # data = extract_metrics(independent, metrics=metrics, project_id="how_so/VPModel")
-    # n_fig = len(metrics)
-    # fig, ax = plt.subplots(n_fig, 1, sharex=True)
-    # for kfold, tmp_data in data.items():
-    #     for i, (metric, (x, y)) in enumerate(tmp_data.items()):
-    #         ax[i].plot(x, y)
-    #         # ax[i].plot(x, y, label=metric)
-    #         # ax[i].legend()
-    # for i, _ in enumerate(tmp_data.items()):
-    #     ax[i].set_ylabel(metrics[i])
-    #     ax[i].set_xlabel("step")
-    # plt.show()
-
     pl.seed_everything(100)
     everything_deterministic()
 
-    all_result, all_data = test_models(discrete, project_id="how_so/VPModel")
-    torch.save(all_result, "all_result_discrete.pt")
-    torch.save(all_data, "all_data_discrete.pt")
+    # update vad_projection metrics
+    metric_kwargs = {
+        "event_pre": 0.5,  # seconds used to estimate PRE-f1-SHIFT/HOLD
+        "event_min_context": 1.0,  # min context duration before extracting metrics
+        "event_min_duration": 0.15,  # the minimum required segment to extract SHIFT/HOLD (start_pad+target_duration)
+        "event_horizon": 1.0,  # SHIFT/HOLD requires lookahead to determine mutual starts etc
+        "event_start_pad": 0.05,  # Predict SHIFT/HOLD after this many seconds of silence after last speaker
+        "event_target_duration": 0.10,  # duration of segment to extract each SHIFT/HOLD guess
+        "event_bc_target_duration": 0.25,  # duration of activity, in a backchannel, to extract BC-ONGOING metrics
+        "event_bc_pre_silence": 1,  # du
+        "event_bc_post_silence": 2,
+        "event_bc_max_active": 1.0,
+        "event_bc_prediction_window": 0.4,
+        "event_bc_neg_active": 1,
+        "event_bc_neg_prefix": 1,
+        "event_bc_ongoing_threshold": 0.5,
+        "event_bc_pred_threshold": 0.5,  # this should be varied
+    }
+    run_path = "how_so/VPModel/sbzhz86n"  # discrete
+    run_path = "how_so/VPModel/10krujrj"  # independent
 
-    all_result, all_data = test_models(independent, project_id="how_so/VPModel")
-    torch.save(all_result, "all_result_independent.pt")
-    torch.save(all_data, "all_data_independent.pt")
+    result, model = test_single_model(run_path, metric_kwargs, bc_pred_pr_curve=True)
 
-    all_result, all_data = test_models(
-        independent_baseline, project_id="how_so/VPModel"
-    )
-    torch.save(all_result, "all_result_ind_base.pt")
-    torch.save(all_data, "all_data_ind_base.pt")
+    R = model.test_metric.compute()
 
-    all_result, all_data = test_models(comparative, project_id="how_so/VPModel")
-    torch.save(all_result, "all_result_comp.pt")
-    torch.save(all_data, "all_data_comp.pt")
+    # torch.save(R, 'discrete_4.pt')
+    RD = torch.load("discrete_4.pt")
+
+    # precision, recall, thresholds = R["pr_curve_bc_pred"]
+    precision, recall, thresholds = RD["pr_curve_bc_pred"]
+    precision = precision.cpu()
+    recall = recall.cpu()
+    thresholds = thresholds.cpu()
+    print("precision: ", tuple(precision.shape))
+    print("recall: ", tuple(recall.shape))
+    print("thresholds: ", tuple(thresholds.shape))
+
+    t = torch.cat((thresholds, thresholds[-1:]))
+    w = t < 0.5
+    t = t[w]
+    # w = thresholds < 0.5
+    # t = thresholds[w]
+    # w = precision < 0.9
+    p = precision[w]
+    r = recall[w]
+    best_p_idx, best_p = p.argmax(), p.max()
+    best_p_r = r[best_p_idx]
+    pr = p * r
+    tsorted, perm_idx = t.sort()
+    pr_sorted = pr[perm_idx]
+    pr_idx = pr.argmax()
+    pr_best = pr[pr_idx]
+    fig, ax = plt.subplots(3, 1)
+    ax[0].plot(r, p)
+    ax[0].scatter(best_p_r, best_p, color="r")
+    ax[0].set_xlabel("recall")
+    ax[0].set_ylabel("precision")
+    ax[0].set_ylim([0, 1])
+    ax[1].plot(tsorted, pr_sorted)
+    ax[1].set_ylabel("precision*recall (AUC)")
+    ax[1].set_xlabel("Threshold")
+    ax[2].plot(tsorted)
+    ax[2].set_ylabel("Threshold")
+    ax[2].set_xlabel("n")
+    plt.tight_layout()
+    plt.pause(0.01)
+
+    fig.savefig("assets/figures/discrete_kfold4_PR_curve.png")
+
+    torch.save(result, "discrete_4.pt")
+
+    result2 = torch.load("discrete_4.pt")
+    result_ind = {
+        "test_loss": 0.3314475417137146,
+        "test_loss_vp": 0.3314475417137146,
+        "test/f1_weighted": 0.8808760643005371,
+        "test/f1_pre_weighted": 0.8570187091827393,
+        "test/f1_bc_ongoing": 0.7675203680992126,
+        "test/f1_bc_prediction": 0.4210428297519684,
+        "test/shift_f1": 0.6267991065979004,
+        "test/shift_precision": 0.686134934425354,
+        "test/shift_recall": 0.5769089460372925,
+        "test/shift_support": 48954.0,
+        "test/hold_f1": 0.9319883584976196,
+        "test/hold_precision": 0.9175283908843994,
+        "test/hold_recall": 0.9469113945960999,
+        "test/hold_support": 243348.0,
+    }
+
+    ###################################################################
+    ###################################################################
+    ############### All models ########################################
+    ###################################################################
+    ###################################################################
+
+    # all_result, all_data = test_models(
+    #     discrete, metric_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_discrete.pt")
+    # torch.save(all_data, "all_data_discrete.pt")
+    #
+    # all_result, all_data = test_models(
+    #     independent, metric_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_independent.pt")
+    # torch.save(all_data, "all_data_independent.pt")
+    #
+    # all_result, all_data = test_models(
+    #     independent_baseline, metric_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_ind_base.pt")
+    # torch.save(all_data, "all_data_ind_base.pt")
+    # all_result, all_data = test_models(comparative, metric_kwargs, project_id="how_so/VPModel")
+    # torch.save(all_result, "all_result_comp.pt")
+    # torch.save(all_data, "all_data_comp.pt")
