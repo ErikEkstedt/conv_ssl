@@ -8,13 +8,12 @@ import pytorch_lightning as pl
 from conv_ssl.models import Encoder, AR
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
-from vad_turn_taking.vad import VAD
 from vad_turn_taking.metrics import TurnTakingMetrics
 from vad_turn_taking.vad_projection import (
     VadLabel,
     ProjectionCodebook,
-    independent_bc_prediction,
 )
+from vad_turn_taking.backchannel import extract_backchannel_prediction_probs_independent
 
 
 class VadCondition(nn.Module):
@@ -225,12 +224,7 @@ class VadProjectionTask(pl.LightningModule):
         probs = logits.sigmoid()
         next_probs = _normalize_reg_probs(probs)
         pre_probs = _normalize_reg_probs(probs[..., :, self.pre_frames :])
-        bc_prediction = independent_bc_prediction(
-            probs,
-            bc_activity_threshold=self.conf["vad_projection"][
-                "event_bc_pred_threshold"
-            ],
-        )
+        bc_prediction = extract_backchannel_prediction_probs_independent(probs)
         return {"p": next_probs, "pre_probs": pre_probs, "bc_prediction": bc_prediction}
 
     def next_speaker_probs_comparative(self, logits):
@@ -311,7 +305,7 @@ class VPModel(VadProjectionTask):
         self.save_hyperparameters()
 
     def init_metric(self, conf, frame_hz, bc_pred_pr_curve=False):
-        return TurnTakingMetrics(
+        metric = TurnTakingMetrics(
             # don't extract events before a certain context is known
             min_context=conf["vad_projection"]["event_min_context"],
             # the event-horizon (same as vad)
@@ -338,6 +332,8 @@ class VPModel(VadProjectionTask):
             bc_pred_pr_curve=bc_pred_pr_curve,
             discrete=not conf["vad_projection"]["regression"],  # discrete model or not
         )
+        metric = metric.to(self.device)
+        return metric
 
     @property
     def run_name(self):
