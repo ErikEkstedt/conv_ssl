@@ -37,8 +37,7 @@ discrete = {
 }
 
 independent = {
-    # "0": "1t7vvo0c",
-    "0": None,
+    "0": "1t7vvo0c",
     "1": "24bn5wi6",
     "2": "1u7yzji0",
     "3": "s5unjaj7",
@@ -52,8 +51,7 @@ independent = {
 }
 
 independent_baseline = {
-    # "0": "2mme28tm",
-    "0": None,
+    "0": "2mme28tm",
     "1": "qo9mf26t",
     "2": "2rrdm5ma",
     "3": "mrzizwex",
@@ -145,13 +143,13 @@ def test_models(id_dict, metric_kwargs, project_id="how_so/VPModel"):
     return all_result, all_data
 
 
-def plot_result_histogram(fig_data, ylim=None, plot=True):
+def plot_result_histogram(fig_data, metrics, ylim=None, figsize=(6, 2), plot=True):
     off = -1.5
-    pad = 0.30
+    pad = 0.20
     w = pad - 0.02
     xx = torch.arange(len(metrics))
     colors = ["b", "orange", "red", "green"]
-    fig, ax = plt.subplots(1, 1, figsize=(12, 4))
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
     for i, (model, result) in enumerate(fig_data.items()):
         for xi, metric in enumerate(metrics):
             x_tmp = xx[xi] + (off * pad)
@@ -250,18 +248,37 @@ def data_ready():
             k.replace("test/", ""): v
             for k, v in torch.load("all_result_ind_base.pt").items()
         },
+        "comperative": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_result_comp.pt").items()
+        },
     }
 
-    metrics = ["f1_weighted", "f1_pre_weighted", "f1_bc_ongoing", "bc_prediction"]
+    # metrics = ["f1_weighted", "f1_pre_weighted", "f1_bc_ongoing", "bc_prediction"]
+    metrics = ["f1_weighted", "f1_pre_weighted", "f1_bc_ongoing"]
     fig_data = {}
     for model, results in data.items():
         fig_data[model] = {}
         for metric in metrics:
             x = torch.tensor(data[model][metric])
             fig_data[model][metric] = {"mean": x.mean(), "std": x.std(unbiased=True)}
-    fig, ax = plot_result_histogram(fig_data, plot=False)
-    plt.pause(0.01)
-    # plt.show()
+
+    for model, values in fig_data.items():
+        print(model)
+        for metric, val in values.items():
+            print(metric, round(val["mean"].item(), 4), round(val["std"].item(), 4))
+
+    fig, ax = plot_result_histogram(
+        fig_data, metrics=metrics, figsize=(6.5, 3), plot=False
+    )
+    ax.set_ylim([0.74, 0.9])
+    ax.set_ylabel("F1")
+    pad = 0.1
+    plt.subplots_adjust(
+        left=0.12, bottom=0.15, right=0.99, top=1 - pad, wspace=None, hspace=None
+    )
+    # plt.pause(0.01)
+    plt.show()
 
     for metric in metrics:
         for model in fig_data.keys():
@@ -428,9 +445,7 @@ if __name__ == "__main__":
     # thresholds = thresholds.cpu()
     # print("precision: ", tuple(precision.shape))
     # print("recall: ", tuple(recall.shape))
-    # print("thresholds: ", tuple(thresholds.shape))
-    #
-    # precision, recall, thresholds = R["discrete"]
+    # print("thresholds: ", tuple(thresholds.shape)) precision, recall, thresholds = R["discrete"]
     # fig, ax = plot_pr_curve(
     #     precision.cpu(), recall.cpu(), thresholds.cpu(), model="Discrete", plot=False
     # )
