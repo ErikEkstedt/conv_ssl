@@ -13,6 +13,7 @@ from vad_turn_taking.vad_projection import (
     VadLabel,
     ProjectionCodebook,
 )
+from vad_turn_taking.vad import VAD
 from vad_turn_taking.backchannel import extract_backchannel_prediction_probs_independent
 
 
@@ -44,6 +45,297 @@ class VadCondition(nn.Module):
             v_cond += self.vad_history(vad_history)
 
         return self.ln(v_cond)
+
+
+class CAPEncoder(nn.Module):
+    def __init__(self, input_shape=(2, 40), latent_dim=32, type="conv"):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.input_shape = input_shape
+
+        self.output_norm = nn.Identity()
+        if type == "linear":
+            self.net = nn.Sequential(
+                nn.Linear(input_shape, latent_dim * 2),
+                nn.Tanh(),
+                nn.Linear(latent_dim * 2, latent_dim),
+            )
+        elif type == "conv":
+            h = 16
+            self.net = nn.Sequential(
+                nn.Conv1d(
+                    input_shape[0],
+                    out_channels=h,
+                    kernel_size=3,
+                    padding=1,
+                ),
+                nn.ReLU(),
+                nn.Conv1d(
+                    h,
+                    out_channels=h,
+                    kernel_size=3,
+                    padding=1,
+                ),
+                nn.ReLU(),
+                nn.Flatten(1),
+                nn.Linear(h * input_shape[-1], latent_dim),
+            )
+
+        self.init_prototypes()
+
+    def extract_negatives(
+        self, y, n_negatives=2, within=True, min_shift=95, max_shift=125
+    ):
+        """
+        Arguments:
+        y:              torch.tensor, (B, t, 2, 40)
+        n_negatives:    int,
+        within:         bool, within or between
+
+        Return:
+        y_neg:      (n_neg, B, t, 2, 40)
+        """
+
+        assert within, f"Only within sampling is defined! but within={within}"
+
+        nb, nt, _, _ = y.shape
+        negs = []
+        t = torch.arange(nt)
+        if within:
+            for b in range(nb):
+                bs = torch.ones(n_negatives * len(t), dtype=torch.long) * b
+                # shift the sequence to avoid same samples, or very similar.
+                shift = torch.randint(min_shift, max_shift, (1,))
+                # tt = t.roll(shift, 0).repeat(n_negatives)
+                tt = t.roll(shift.item(), 0).repeat(n_negatives)
+                negs.append(
+                    einops.rearrange(y[bs, tt], "(a n) c d -> a n c d", a=n_negatives)
+                )
+            negs = torch.stack(negs, dim=1)
+        return negs
+
+    def _prototype_vector(
+        self,
+        active_channel,
+        silence_prefix=0,
+        silence_suffix=0,
+        other_active_prefix=0,
+        other_active_suffix=0,
+    ):
+        v = torch.zeros(self.input_shape, dtype=torch.float)
+
+        if silence_prefix > 0:
+            v[active_channel, silence_prefix:] = 1.0
+
+        if silence_suffix > 0:
+            v[active_channel, -silence_suffix:] = 0.0
+
+        other_channel = 0 if active_channel == 1 else 1
+
+        if other_active_prefix > 0:
+            v[other_channel, :other_active_prefix] = 1.0
+
+        if other_active_suffix > 0:
+            v[other_channel, -other_active_suffix:] = 1.0
+
+        return v
+
+    def init_prototypes(self):
+        n = self.input_shape[-1]
+        silence_prefix = n // 4
+        bc_other_prefix = silence_prefix // 2
+
+        prototypes = []
+        # next speaker on silence
+        prototypes.append(self._prototype_vector(0, silence_prefix))
+        prototypes.append(self._prototype_vector(1, silence_prefix))
+        # next speaker on active
+        prototypes.append(
+            self._prototype_vector(
+                0, silence_prefix, other_active_prefix=silence_prefix
+            )
+        )
+        prototypes.append(
+            self._prototype_vector(
+                1, silence_prefix, other_active_prefix=silence_prefix
+            )
+        )
+        # BC prediction Silence
+        prototypes.append(
+            self._prototype_vector(
+                0,
+                silence_prefix,
+                silence_suffix=silence_prefix,
+                other_active_suffix=silence_prefix,
+            )
+        )
+        prototypes.append(
+            self._prototype_vector(
+                1,
+                silence_prefix,
+                silence_suffix=silence_prefix,
+                other_active_suffix=silence_prefix,
+            )
+        )
+        # BC prediction Active
+        prototypes.append(
+            self._prototype_vector(
+                0,
+                silence_prefix,
+                silence_suffix=silence_prefix,
+                other_active_prefix=bc_other_prefix,
+                other_active_suffix=silence_prefix,
+            )
+        )
+        prototypes.append(
+            self._prototype_vector(
+                1,
+                silence_prefix,
+                silence_suffix=silence_prefix,
+                other_active_prefix=bc_other_prefix,
+                other_active_suffix=silence_prefix,
+            )
+        )
+
+        self.prototypes = torch.stack(prototypes)
+        self.prototypes_names = {
+            "a_next_sil": 1,
+            "b_next_sil": 2,
+            "a_next_act": 3,
+            "b_next_act": 4,
+            "a_bc_pred": 5,
+            "b_bc_pred": 6,
+            "a_bc_pred_act": 7,
+            "b_bc_pred_act": 8,
+        }
+        self.prototypes_idx = {v: k for k, v in self.prototypes_names.items()}
+
+    def get_probs(self, z_pred, vad=None):
+        """
+        Given the predicted vector at each time step, compare 'prototype' vectors, and match the closest.
+        """
+
+        B, T, D = z_pred.shape
+        zp = self(self.prototypes.to(z_pred.device))
+        zp = zp.unsqueeze(1)  # batch dim
+
+        zpredflat = einops.rearrange(z_pred, "b t d -> (b t) d")
+        score = F.cosine_similarity(zpredflat, zp, dim=-1)
+        score = einops.rearrange(score, "n (b t) -> n b t", b=B)  # (N, B, T)
+
+        # SILENCE probs
+        # ON SILENCE: compare prototype score for A is next speaker with B
+        # compare the normalized distance and treat as a probability
+        # shift and scale scores [-1, 1] -> [0, 2] -> [0, 1]
+        # i.e. A=0.3 and B=-.2 -> 1.3, 0.2 -> 0.65, 0.1 ->
+        a_sil = (score[0] + 1) / 2
+        b_sil = (score[1] + 1) / 2
+        sum = a_sil + b_sil
+        sil_probs = torch.stack((a_sil, b_sil), dim=-1) / sum.unsqueeze(-1)
+
+        # ACTIVE
+        # Compare a-active with B-is-next from above -> renormalize etc
+        a_act = (score[2] + 1) / 2
+        a_act = a_act / (a_act + b_sil)
+        b_act = (score[3] + 1) / 2
+        b_act = b_act / (b_act + a_sil)
+        act_probs = torch.stack((a_act, b_act), dim=-1)
+
+        # BC prediction SILENCE
+        # We only use the the normalized score for the backchannel
+        # prediction -> using a threshold during test to find where the best value is
+        a_bc_pred_sil = (score[4] + 1) / 2
+        b_bc_pred_sil = (score[5] + 1) / 2
+
+        # BC prediction ACTIVE
+        # We only use the the normalized score for the backchannel
+        # prediction -> using a threshold during test to find where the best value is
+        a_bc_pred_act = (score[6] + 1) / 2
+        b_bc_pred_act = (score[7] + 1) / 2
+
+        ################################################################
+        # Final "Probabilities"
+        ################################################################
+        # Extract appropriate values on certain states of the input
+        p_a = torch.zeros_like(sil_probs[..., 0])
+        p_b = torch.zeros_like(sil_probs[..., 0])
+        p_a_bc_pred = torch.zeros_like(sil_probs[..., 0])
+        p_b_bc_pred = torch.zeros_like(sil_probs[..., 0])
+
+        # dialog states
+        ds = VAD.vad_to_dialog_vad_states(vad)
+        silence = ds == 1
+        a_current = ds == 0
+        b_current = ds == 3
+        both = ds == 2
+
+        # silence
+        w = torch.where(silence)
+        p_a[w] = sil_probs[w][..., 0]
+        p_b[w] = sil_probs[w][..., 1]
+        p_a_bc_pred[w] = a_bc_pred_sil[w]
+        p_b_bc_pred[w] = b_bc_pred_sil[w]
+
+        # A current speaker
+        # Given only A is speaking we use the 'active' probability of B being the next speaker
+        w = torch.where(a_current)
+        p_a[w] = 1 - act_probs[w][..., 1]  # P_a = 1-P_b
+        p_b[w] = act_probs[w][..., 1]  # P_b
+        p_a_bc_pred[w] = 1 - b_bc_pred_act[w]
+        p_b_bc_pred[w] = b_bc_pred_act[w]
+
+        # B current speaker
+        w = torch.where(b_current)
+        p_a[w] = act_probs[w][..., 0]  # P_a for A being next speaker, while B is active
+        p_b[w] = 1 - act_probs[w][..., 0]  # P_b = 1-P_a
+        p_a_bc_pred[w] = a_bc_pred_act[w]
+        p_b_bc_pred[w] = 1 - a_bc_pred_act[w]
+
+        # Both
+        # P_a_prior=A is next (active)
+        # P_b_prior=B is next (active)
+        # We the compare/renormalize given the two values of A/B is the next speaker
+        # sum = P_a_prior+P_b_prior
+        # P_a = P_a_prior / sum
+        # P_b = P_b_prior / sum
+        w = torch.where(both)
+        # Re-Normalize and compare next-active
+        sum = act_probs[w][..., 0] + act_probs[w][..., 1]
+        p_a[w] = act_probs[w][..., 0] / sum
+        p_b[w] = act_probs[w][..., 1] / sum
+        p = torch.stack((p_a, p_b), dim=-1)
+        bc_probs = torch.stack((p_a_bc_pred, p_b_bc_pred), dim=-1)
+        return {"p": p, "bc_prediction": bc_probs}
+
+    def nce_loss(self, z_pred, y, n_negatives=5):
+        b, t, c, d = y.shape
+
+        # Positives
+        yp = einops.rearrange(y, "b t ... -> (b t) ...")
+        zp = einops.rearrange(self(yp), "(b t) ... -> b t ...", b=b, t=t)
+        zp = zp.unsqueeze(0)  # add neg/pos dimension
+
+        # Negatives
+        y_neg = self.extract_negatives(y, n_negatives=n_negatives)
+        yn = einops.rearrange(y_neg, "n b t ... -> (n b t) ...")
+        zn = einops.rearrange(
+            self(yn), "(n b t) ... -> n b t ... ", n=n_negatives, b=b, t=t
+        )
+
+        # Join positives/negatives
+        zjoint = torch.cat((zp, zn))
+
+        # calculate similarity
+        score = F.cosine_similarity(z_pred, zjoint, dim=-1)
+        score = einops.rearrange(score, "n b t -> (b t) n")
+        label = torch.zeros_like(score[:, 0], dtype=torch.long)
+        loss = F.cross_entropy(score, label)
+        return loss
+
+    def forward(self, x):
+        z = self.net(x)
+        z = self.output_norm(z)
+        return z
 
 
 class ProjectionModel(nn.Module):
@@ -90,6 +382,16 @@ class ProjectionModel(nn.Module):
                     nn.Linear(input_dim, cf),
                     Rearrange("... (c f) -> ... c f", c=2, f=cf // 2),
                 )
+        elif conf["vad_projection"]["latent"]:
+            self.projection_head = nn.Linear(
+                input_dim, conf["vad_projection"]["latent_dim"]
+            )
+            bins = len(conf["vad_projection"]["bin_times"])
+            self.future_encoder = CAPEncoder(
+                input_shape=(2, bins),
+                latent_dim=conf["vad_projection"]["latent_dim"],
+                type="conv",
+            )
         else:
             total_bins = 2 * len(conf["vad_projection"]["bin_times"])
             self.n_classes = 2 ** total_bins
@@ -241,6 +543,8 @@ class VadProjectionTask(pl.LightningModule):
                 out = self.next_speaker_probs_comparative(logits)
             else:
                 out = self.next_speaker_probs_independent(logits)
+        elif self.conf["vad_projection"]["latent"]:
+            out = self.net.future_encoder.get_probs(z_pred=logits, vad=vad)
         else:
             out = self.projection_codebook.get_probs(logits, vad)
             out["pre_probs"] = None
@@ -291,7 +595,7 @@ class VPModel(VadProjectionTask):
         # only use discrete codes if necessary
         self.regression = conf["vad_projection"]["regression"]
         self.pre_frames = conf["vad_projection"]["regression_pre_frames"]
-        if not self.regression:
+        if not (self.regression or self.conf["vad_projection"]["latent"]):
             self.projection_codebook = ProjectionCodebook(
                 bin_times=conf["vad_projection"]["bin_times"],
                 frame_hz=self.net.encoder.frame_hz,
@@ -347,6 +651,8 @@ class VPModel(VadProjectionTask):
             else:
                 n_bins = len(self.conf["vad_projection"]["bin_times"])
                 name += f"_ind_{n_bins}"
+        elif self.conf["vad_projection"]["latent"]:
+            name += "_latent"
         return name
 
     def forward(self, *args, **kwargs):
@@ -407,6 +713,11 @@ class VPModel(VadProjectionTask):
                     loss["vp"] = F.binary_cross_entropy_with_logits(
                         out["logits_vp"], vad_projection_window
                     )
+        elif self.conf["vad_projection"]["latent"]:
+            z_pred = out["logits_vp"]  # Not logits but projected z vectors
+            loss["vp"] = self.net.future_encoder.nce_loss(
+                z_pred, vad_projection_window, n_negatives=5
+            )
         else:
             # Vad Projection Loss
             vad_labels = self.projection_codebook(vad_projection_window)
@@ -416,6 +727,10 @@ class VPModel(VadProjectionTask):
 
         # ULM Loss
         if self.net.ulm is not None and input_ids is not None:
+            if self.conf["vad_projection"]["latent"]:
+                raise NotImplementedError(
+                    "Can't use 'latent' contrastive training with ULM yet..."
+                )
             loss["ar"] = self.net.loss_ulm(
                 out["logits_ar"], input_ids, reduction=reduction
             )
@@ -605,6 +920,61 @@ class VPModel(VadProjectionTask):
         default_conf = VPModel.load_config(format=None)
         parser = OmegaConfArgs.add_argparse_args(parser, default_conf)
         return parent_parser
+
+
+def debug_capencoder():
+    from datasets_turntaking import DialogAudioDM
+
+    input_shape = (2, 40)
+    N = 1000
+    B = 4
+    D = 32
+    y = torch.randint(0, 2, (B, N, *input_shape), dtype=torch.float)
+    print("y: ", tuple(y.shape))
+
+    #######################################################################
+    # TEST CAPENCODER
+    enc = CAPEncoder(input_shape=input_shape, latent_dim=D, type="conv")
+    # self = enc
+
+    # z prediction
+    z_pred = torch.rand((B, N, D))
+    print("z_pred: ", tuple(z_pred.shape))
+    # contrastive loss for conv
+    l = enc.nce_loss(z_pred, y, n_negatives=5)
+    print("loss: ", l)
+    #######################################################################
+
+    out = enc.get_probs(z_pred, vad)
+
+    data_conf = DialogAudioDM.load_config()
+    dm = DialogAudioDM(
+        datasets=data_conf["dataset"]["datasets"],
+        type=data_conf["dataset"]["type"],
+        sample_rate=data_conf["dataset"]["sample_rate"],
+        audio_duration=data_conf["dataset"]["audio_duration"],
+        audio_normalize=data_conf["dataset"]["audio_normalize"],
+        audio_overlap=data_conf["dataset"]["audio_overlap"],
+        audio_context_duration=data_conf["dataset"]["audio_context_duration"],
+        ipu_min_time=data_conf["dataset"]["ipu_min_time"],
+        ipu_pause_time=data_conf["dataset"]["ipu_pause_time"],
+        vad_hz=100,
+        vad_horizon=2.0,
+        vad_history=data_conf["dataset"]["vad_history"],
+        vad_history_times=data_conf["dataset"]["vad_history_times"],
+        batch_size=4,
+        num_workers=0,
+    )
+    dm.prepare_data()
+    dm.setup()
+    print(dm)
+    diter = iter(dm.val_dataloader())
+    batch = next(diter)
+
+    conf = VPModel.load_config(path="conv_ssl/config/model_latent.yaml")
+    model = VPModel(conf)
+
+    loss, out, batch = model.shared_step(batch)
 
 
 if __name__ == "__main__":
