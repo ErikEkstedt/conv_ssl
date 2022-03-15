@@ -58,6 +58,10 @@ vad_projection:
   event_bc_post_silence: 2
   event_bc_max_active: 1
   event_bc_prediction_window: 0.5
+  event_bc_neg_active: 1
+  event_bc_neg_prefix: 1
+  event_bc_ongoing_threshold: 0.5
+  event_bc_pred_threshold: 0.5
 
 optimizer:
   alpha: 0.6
