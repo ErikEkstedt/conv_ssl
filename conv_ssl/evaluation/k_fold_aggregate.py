@@ -23,7 +23,7 @@ api = wandb.Api()
 
 
 discrete = {
-    "0": None,
+    "0": "1h52tpnn",
     "1": "3fhjobk0",
     "2": "120k8fdv",
     "3": "1vx0omkd",
@@ -261,6 +261,7 @@ def data_ready():
         fig_data[model] = {}
         for metric in metrics:
             x = torch.tensor(data[model][metric])
+            print(len(x))
             fig_data[model][metric] = {"mean": x.mean(), "std": x.std(unbiased=True)}
 
     for model, values in fig_data.items():
@@ -428,6 +429,7 @@ if __name__ == "__main__":
         "event_bc_ongoing_threshold": 0.5,
         "event_bc_pred_threshold": 0.5,
     }
+
     # run_path = "how_so/VPModel/sbzhz86n"  # discrete
     # run_path = "how_so/VPModel/10krujrj"  # independent
     #
@@ -468,11 +470,12 @@ if __name__ == "__main__":
     ###################################################################
     ###################################################################
 
-    # all_result, all_data = test_models(
-    #     discrete, metric_kwargs, project_id="how_so/VPModel"
-    # )
-    # torch.save(all_result, "all_result_discrete.pt")
-    # torch.save(all_data, "all_data_discrete.pt")
+    all_result, all_data = test_models(
+        discrete, metric_kwargs, project_id="how_so/VPModel"
+    )
+    torch.save(
+        all_result_pw_equal, "all_result_discrete.pt"
+    )  # torch.save(all_data, "all_data_discrete.pt")
     # all_result, all_data = test_models(
     #     independent, metric_kwargs, project_id="how_so/VPModel"
     # )
@@ -483,8 +486,8 @@ if __name__ == "__main__":
     # )
     # torch.save(all_result, "all_result_ind_base.pt")
     # torch.save(all_data, "all_data_ind_base.pt")
-    all_result, all_data = test_models(
-        comparative, metric_kwargs, project_id="how_so/VPModel"
-    )
-    torch.save(all_result, "all_result_comp.pt")
-    torch.save(all_data, "all_data_comp.pt")
+    # all_result, all_data = test_models(
+    #     comparative, metric_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_comp.pt")
+    # torch.save(all_data, "all_data_comp.pt")
