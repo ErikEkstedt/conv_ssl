@@ -559,6 +559,12 @@ class VPModel(VadProjectionTask):
 
     def __init__(self, conf) -> None:
         super().__init__()
+
+        # tmp fix
+        if "latent" not in conf["vad_projection"]:
+            conf["vad_projection"]["latent"] = False
+            conf["vad_projection"]["latent_dim"] = -1
+
         self.net = ProjectionModel(conf)
 
         # Extract labels
@@ -595,6 +601,7 @@ class VPModel(VadProjectionTask):
         # only use discrete codes if necessary
         self.regression = conf["vad_projection"]["regression"]
         self.pre_frames = conf["vad_projection"]["regression_pre_frames"]
+
         if not (self.regression or self.conf["vad_projection"]["latent"]):
             self.projection_codebook = ProjectionCodebook(
                 bin_times=conf["vad_projection"]["bin_times"],
@@ -608,33 +615,41 @@ class VPModel(VadProjectionTask):
         self.weight_decay = conf["optimizer"]["weight_decay"]
         self.save_hyperparameters()
 
-    def init_metric(self, conf, frame_hz, bc_pred_pr_curve=False):
+    def init_metric(self, conf, frame_hz, bc_pred_pr_curve=False, **event_kwargs):
+        # metric = TurnTakingMetrics(
+        #     # don't extract events before a certain context is known
+        #     min_context=conf["vad_projection"]["event_min_context"],
+        #     # the event-horizon (same as vad)
+        #     horizon=conf["vad_projection"]["event_horizon"],
+        #     # time after activity to start use frames for prediction
+        #     start_pad=conf["vad_projection"]["event_start_pad"],
+        #     # number of frames to use in metrics/event
+        #     target_duration=conf["vad_projection"]["event_target_duration"],
+        #     # the frame-hz of vad-representation
+        #     frame_hz=frame_hz,
+        #     # time at eot to predict shift/holf
+        #     pre_active=conf["vad_projection"]["event_pre"],
+        #     # silence before activity to be considered BC
+        #     bc_pre_silence=conf["vad_projection"]["event_bc_pre_silence"],
+        #     # silence after activity to be considered BC
+        #     bc_post_silence=conf["vad_projection"]["event_bc_post_silence"],
+        #     # longest activity to be considered BC
+        #     bc_max_active=conf["vad_projection"]["event_bc_max_active"],
+        #     # The amount of time prior a backchannel to infer bc-prediciton stats
+        #     bc_prediction_window=conf["vad_projection"]["event_bc_prediction_window"],
+        #     threshold=0.5,  # f1 threshold
+        #     threshold_bc_ongoing=conf["vad_projection"]["event_bc_ongoing_threshold"],
+        #     threshold_bc_pred=conf["vad_projection"]["event_bc_pred_threshold"],
+        #     bc_pred_pr_curve=bc_pred_pr_curve,
+        #     discrete=not conf["vad_projection"]["regression"],  # discrete model or not
+        # )
         metric = TurnTakingMetrics(
-            # don't extract events before a certain context is known
-            min_context=conf["vad_projection"]["event_min_context"],
-            # the event-horizon (same as vad)
-            horizon=conf["vad_projection"]["event_horizon"],
-            # time after activity to start use frames for prediction
-            start_pad=conf["vad_projection"]["event_start_pad"],
-            # number of frames to use in metrics/event
-            target_duration=conf["vad_projection"]["event_target_duration"],
-            # the frame-hz of vad-representation
-            frame_hz=frame_hz,
-            # time at eot to predict shift/holf
-            pre_active=conf["vad_projection"]["event_pre"],
-            # silence before activity to be considered BC
-            bc_pre_silence=conf["vad_projection"]["event_bc_pre_silence"],
-            # silence after activity to be considered BC
-            bc_post_silence=conf["vad_projection"]["event_bc_post_silence"],
-            # longest activity to be considered BC
-            bc_max_active=conf["vad_projection"]["event_bc_max_active"],
-            # The amount of time prior a backchannel to infer bc-prediciton stats
-            bc_prediction_window=conf["vad_projection"]["event_bc_prediction_window"],
-            threshold=0.5,  # f1 threshold
-            threshold_bc_ongoing=conf["vad_projection"]["event_bc_ongoing_threshold"],
-            threshold_bc_pred=conf["vad_projection"]["event_bc_pred_threshold"],
+            threshold_pred_shift=0.5,
+            threshold_short_long=0.5,
+            threshold_bc_pred=0.1,
             bc_pred_pr_curve=bc_pred_pr_curve,
-            discrete=not conf["vad_projection"]["regression"],  # discrete model or not
+            frame_hz=frame_hz,
+            **event_kwargs,
         )
         metric = metric.to(self.device)
         return metric

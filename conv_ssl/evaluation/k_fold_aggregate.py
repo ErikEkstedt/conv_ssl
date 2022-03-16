@@ -105,7 +105,7 @@ def extract_metrics(
     return data
 
 
-def test_single_model(run_path, metric_kwargs, bc_pred_pr_curve=False):
+def test_single_model_OLD(run_path, metric_kwargs, bc_pred_pr_curve=False):
     # Load data (same across folds)
     dm = load_dm(vad_hz=100, horizon=2, batch_size=16, num_workers=4)
 
@@ -124,7 +124,26 @@ def test_single_model(run_path, metric_kwargs, bc_pred_pr_curve=False):
     return result, model
 
 
-def test_models(id_dict, metric_kwargs, project_id="how_so/VPModel"):
+def test_single_model(run_path, event_kwargs, bc_pred_pr_curve=False):
+    # Load data (same across folds)
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=16, num_workers=4)
+
+    # Load model and process test-set
+    model = load_model(run_path=run_path, eval=True, strict=False)
+
+    # Updatemetric_kwargs metrics
+    # for metric, val in metric_kwargs.items():
+    #     model.conf["vad_projection"][metric] = val
+
+    model.test_metric = model.init_metric(
+        model.conf, model.frame_hz, bc_pred_pr_curve=bc_pred_pr_curve, **event_kwargs
+    )
+    model.test_metric = model.test_metric.to(model.device)
+    result = test(model, dm, online=False)
+    return result, model
+
+
+def test_models(id_dict, event_kwargs, project_id="how_so/VPModel"):
     all_data = {}
     all_result = {}
     for kfold, id in id_dict.items():
@@ -132,7 +151,7 @@ def test_models(id_dict, metric_kwargs, project_id="how_so/VPModel"):
             continue
         run_path = join(project_id, id)
         print(f"{kfold} run_path: ", run_path)
-        result, _ = test_single_model(run_path, metric_kwargs)
+        result, _ = test_single_model(run_path, event_kwargs=event_kwargs)
         all_data[kfold] = result
         # add results
         for metric, value in result[0].items():
@@ -203,6 +222,7 @@ def plot_pr_curve(
     if ax is None:
         fig, ax = plt.subplots(2, 1)
     ax[0].plot(recall, precision, alpha=0.8, label=model)
+    # ax[0].scatter(recall, precision, alpha=0.3, label=model)
     ax[0].set_xlabel("Recall")
     ax[0].set_ylabel("Precision")
     ax[0].set_ylim([0, 1])
@@ -261,7 +281,6 @@ def data_ready():
         fig_data[model] = {}
         for metric in metrics:
             x = torch.tensor(data[model][metric])
-            print(len(x))
             fig_data[model][metric] = {"mean": x.mean(), "std": x.std(unbiased=True)}
 
     for model, values in fig_data.items():
@@ -412,42 +431,51 @@ if __name__ == "__main__":
     everything_deterministic()
 
     # update vad_projection metrics
-    metric_kwargs = {
-        "event_pre": 0.5,  # seconds used to estimate PRE-f1-SHIFT/HOLD
-        "event_min_context": 1.0,  # min context duration before extracting metrics
-        "event_min_duration": 0.15,  # the minimum required segment to extract SHIFT/HOLD (start_pad+target_duration)
-        "event_horizon": 1.0,  # SHIFT/HOLD requires lookahead to determine mutual starts etc
-        "event_start_pad": 0.05,  # Predict SHIFT/HOLD after this many seconds of silence after last speaker
-        "event_target_duration": 0.10,  # duration of segment to extract each SHIFT/HOLD guess
-        "event_bc_target_duration": 0.25,  # duration of activity, in a backchannel, to extract BC-ONGOING metrics
-        "event_bc_pre_silence": 1,  # du
-        "event_bc_post_silence": 2,
-        "event_bc_max_active": 1.0,
-        "event_bc_prediction_window": 0.4,
-        "event_bc_neg_active": 1,
-        "event_bc_neg_prefix": 1,
-        "event_bc_ongoing_threshold": 0.5,
-        "event_bc_pred_threshold": 0.5,
-    }
+    event_kwargs = dict(
+        shift_onset_cond=1,
+        shift_offset_cond=1,
+        hold_onset_cond=1,
+        hold_offset_cond=1,
+        min_silence=0.15,
+        non_shift_horizon=2.0,
+        non_shift_majority_ratio=0.95,
+        metric_pad=0.05,
+        metric_dur=0.1,
+        metric_onset_dur=0.3,
+        metric_pre_label_dur=0.5,
+        metric_min_context=1.0,
+        bc_max_duration=1.0,
+        bc_pre_silence=1.0,
+        bc_post_silence=1.0,
+    )
 
     # run_path = "how_so/VPModel/sbzhz86n"  # discrete
     # run_path = "how_so/VPModel/10krujrj"  # independent
     #
-    # result, model = test_single_model(run_path, metric_kwargs, bc_pred_pr_curve=True)
+    # result, model = test_single_model(
+    #     run_path, event_kwargs=event_kwargs, bc_pred_pr_curve=False
+    # )
+    # result, model = test_single_model(run_path, event_kwargs=event_kwargs, bc_pred_pr_curve=True)
     #
     # R = model.test_metric.compute()
     #
     # # torch.save(R, 'discrete_4.pt')
     #
+
+    ###################################################################
+    ###################################################################
+    ############### PR-CURVES #########################################
+    ###################################################################
+    ###################################################################
     # R = torch.load("pr_bc_pred_data.pt")
-    #
     # precision, recall, thresholds = R["discrete"]
     # precision = precision.cpu()
     # recall = recall.cpu()
     # thresholds = thresholds.cpu()
     # print("precision: ", tuple(precision.shape))
     # print("recall: ", tuple(recall.shape))
-    # print("thresholds: ", tuple(thresholds.shape)) precision, recall, thresholds = R["discrete"]
+    # print("thresholds: ", tuple(thresholds.shape))
+    # precision, recall, thresholds = R["discrete"]
     # fig, ax = plot_pr_curve(
     #     precision.cpu(), recall.cpu(), thresholds.cpu(), model="Discrete", plot=False
     # )
@@ -462,6 +490,21 @@ if __name__ == "__main__":
     #     plot=False,
     # )
     # plt.show()
+    #
+    # precision, recall, thresholds = R["independent"]
+    # print("precision: ", tuple(precision.shape))
+    # print("recall: ", tuple(recall.shape))
+    # print("thresholds: ", tuple(thresholds.shape))
+    # fig, ax = plot_pr_curve(
+    #     precision.cpu(),
+    #     recall.cpu(),
+    #     thresholds.cpu(),
+    #     model="Independent",
+    #     color_auc_max="b",
+    #     thresh_min=0,
+    #     plot=False,
+    # )
+    # plt.show()
     # plt.pause(0.01)
 
     ###################################################################
@@ -470,24 +513,23 @@ if __name__ == "__main__":
     ###################################################################
     ###################################################################
 
+    # all_result, all_data = test_models(
+    #     discrete, event_kwargs=event_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_discrete_new.pt")
+    # torch.save(all_data, "all_data_discrete_new.pt")
     all_result, all_data = test_models(
-        discrete, metric_kwargs, project_id="how_so/VPModel"
+        independent, event_kwargs=event_kwargs, project_id="how_so/VPModel"
     )
-    torch.save(
-        all_result_pw_equal, "all_result_discrete.pt"
-    )  # torch.save(all_data, "all_data_discrete.pt")
+    torch.save(all_result, "all_result_independent_new.pt")
+    torch.save(all_data, "all_data_independent_new.pt")
     # all_result, all_data = test_models(
-    #     independent, metric_kwargs, project_id="how_so/VPModel"
+    #     independent_baseline, event_kwargs=event_kwargs, project_id="how_so/VPModel"
     # )
-    # torch.save(all_result, "all_result_independent.pt")
-    # torch.save(all_data, "all_data_independent.pt")
+    # torch.save(all_result, "all_result_ind_base_new.pt")
+    # torch.save(all_data, "all_data_ind_base_new.pt")
     # all_result, all_data = test_models(
-    #     independent_baseline, metric_kwargs, project_id="how_so/VPModel"
+    #     comparative, event_kwargs=event_kwargs, project_id="how_so/VPModel"
     # )
-    # torch.save(all_result, "all_result_ind_base.pt")
-    # torch.save(all_data, "all_data_ind_base.pt")
-    # all_result, all_data = test_models(
-    #     comparative, metric_kwargs, project_id="how_so/VPModel"
-    # )
-    # torch.save(all_result, "all_result_comp.pt")
-    # torch.save(all_data, "all_data_comp.pt")
+    # torch.save(all_result, "all_result_comp_new.pt")
+    # torch.save(all_data, "all_data_comp_new.pt")
