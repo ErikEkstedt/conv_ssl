@@ -513,23 +513,23 @@ if __name__ == "__main__":
     ###################################################################
     ###################################################################
 
-    # all_result, all_data = test_models(
-    #     discrete, event_kwargs=event_kwargs, project_id="how_so/VPModel"
-    # )
-    # torch.save(all_result, "all_result_discrete_new.pt")
-    # torch.save(all_data, "all_data_discrete_new.pt")
+    all_result, all_data = test_models(
+        discrete, event_kwargs=event_kwargs, project_id="how_so/VPModel"
+    )
+    torch.save(all_result, "all_result_discrete_new.pt")
+    torch.save(all_data, "all_data_discrete_new.pt")
     all_result, all_data = test_models(
         independent, event_kwargs=event_kwargs, project_id="how_so/VPModel"
     )
     torch.save(all_result, "all_result_independent_new.pt")
     torch.save(all_data, "all_data_independent_new.pt")
-    # all_result, all_data = test_models(
-    #     independent_baseline, event_kwargs=event_kwargs, project_id="how_so/VPModel"
-    # )
-    # torch.save(all_result, "all_result_ind_base_new.pt")
-    # torch.save(all_data, "all_data_ind_base_new.pt")
-    # all_result, all_data = test_models(
-    #     comparative, event_kwargs=event_kwargs, project_id="how_so/VPModel"
-    # )
-    # torch.save(all_result, "all_result_comp_new.pt")
-    # torch.save(all_data, "all_data_comp_new.pt")
+    all_result, all_data = test_models(
+        independent_baseline, event_kwargs=event_kwargs, project_id="how_so/VPModel"
+    )
+    torch.save(all_result, "all_result_ind_base_new.pt")
+    torch.save(all_data, "all_data_ind_base_new.pt")
+    all_result, all_data = test_models(
+        comparative, event_kwargs=event_kwargs, project_id="how_so/VPModel"
+    )
+    torch.save(all_result, "all_result_comp_new.pt")
+    torch.save(all_data, "all_data_comp_new.pt")
