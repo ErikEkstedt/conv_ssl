@@ -224,7 +224,7 @@ def plot_area(oh, ax, y1=-1, y2=1, label=None, color="b", alpha=1, **kwargs):
         color=color,
         alpha=alpha,
         label=label,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -699,5 +699,63 @@ def plot_window(
     if plot:
         plt.tight_layout()
         plt.pause(0.001)
+
+    return fig, ax
+
+
+def plot_pr_curve(
+    precision,
+    recall,
+    thresholds,
+    model="model",
+    color_auc_max="r",
+    thresh_min=0,
+    ax=None,
+    plot=True,
+):
+    thresholds = torch.cat((thresholds, thresholds[-1:]), dim=0)
+
+    if thresh_min > 0:
+        w = torch.where(thresholds >= thresh_min)
+        thresholds = thresholds[w]
+        precision = precision[w]
+        recall = recall[w]
+
+    auc = precision * recall
+
+    f1 = 2 * precision * recall / (precision + recall)
+
+    fig = None
+    if ax is None:
+        fig, ax = plt.subplots(3, 1)
+    ax[0].plot(recall, precision, alpha=0.8, label=model)
+    # ax[0].scatter(recall, precision, alpha=0.3, label=model)
+    ax[0].set_xlabel("Recall")
+    ax[0].set_ylabel("Precision")
+    ax[0].set_ylim([0, 1])
+    ax[0].legend()
+    ###############################################
+    # AUC
+    auc_max, auc_idx = auc.max(dim=0)
+    auc_max = round(auc_max.item(), 4)
+    auc_thresh = round(thresholds[auc_idx].item(), 3)
+    ax[1].plot(thresholds, auc, alpha=0.8, label=model)
+    ax[1].scatter(
+        auc_thresh,
+        auc_max,
+        color=color_auc_max,
+        label=f"{model} AUC: ({auc_thresh}, {auc_max})",
+        s=12,
+    )
+    ax[1].set_ylabel("AUC (precision*recall)")
+    ax[1].set_xlabel("Threshold")
+    ax[1].legend()
+    ###############################################
+    ax[2].plot(thresholds, f1)
+    ax[2].set_ylabel("F1")
+    ax[2].set_xlabel("thresholds")
+    plt.tight_layout()
+    if plot:
+        plt.pause(0.01)
 
     return fig, ax

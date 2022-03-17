@@ -9,6 +9,7 @@ import scipy.stats as stats
 import pytorch_lightning as pl
 
 from conv_ssl.utils import everything_deterministic
+from conv_ssl.plot_utils import plot_pr_curve
 from conv_ssl.evaluation.utils import load_model, load_dm
 from conv_ssl.evaluation.evaluation import test
 
@@ -124,12 +125,15 @@ def test_single_model_OLD(run_path, metric_kwargs, bc_pred_pr_curve=False):
     return result, model
 
 
-def test_single_model(run_path, event_kwargs, bc_pred_pr_curve=False):
+def test_single_model(run_path, event_kwargs, bc_pred_pr_curve=False, batch_size=16):
     # Load data (same across folds)
-    dm = load_dm(vad_hz=100, horizon=2, batch_size=16, num_workers=4)
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=batch_size, num_workers=4)
 
     # Load model and process test-set
     model = load_model(run_path=run_path, eval=True, strict=False)
+
+    if torch.cuda.is_available():
+        model = model.to("cuda")
 
     # Updatemetric_kwargs metrics
     # for metric, val in metric_kwargs.items():
@@ -198,62 +202,6 @@ def plot_result_histogram(fig_data, metrics, ylim=None, figsize=(6, 2), plot=Tru
     return fig, ax
 
 
-def plot_pr_curve(
-    precision,
-    recall,
-    thresholds,
-    model="model",
-    color_auc_max="r",
-    thresh_min=0,
-    ax=None,
-    plot=True,
-):
-    thresholds = torch.cat((thresholds, thresholds[-1:]), dim=0)
-
-    if thresh_min > 0:
-        w = torch.where(thresholds >= thresh_min)
-        thresholds = thresholds[w]
-        precision = precision[w]
-        recall = recall[w]
-
-    auc = precision * recall
-
-    fig = None
-    if ax is None:
-        fig, ax = plt.subplots(2, 1)
-    ax[0].plot(recall, precision, alpha=0.8, label=model)
-    # ax[0].scatter(recall, precision, alpha=0.3, label=model)
-    ax[0].set_xlabel("Recall")
-    ax[0].set_ylabel("Precision")
-    ax[0].set_ylim([0, 1])
-    ax[0].legend()
-    ###############################################
-    # AUC
-    auc_max, auc_idx = auc.max(dim=0)
-    auc_max = round(auc_max.item(), 4)
-    auc_thresh = round(thresholds[auc_idx].item(), 3)
-    ax[1].plot(thresholds, auc, alpha=0.8, label=model)
-    ax[1].scatter(
-        auc_thresh,
-        auc_max,
-        color=color_auc_max,
-        label=f"{model} AUC: ({auc_thresh}, {auc_max})",
-        s=12,
-    )
-    ax[1].set_ylabel("AUC (precision*recall)")
-    ax[1].set_xlabel("Threshold")
-    ax[1].legend()
-    ###############################################
-    # ax[2].plot(thresholds)
-    # ax[2].set_ylabel("Threshold")
-    # ax[2].set_xlabel("n")
-    plt.tight_layout()
-    if plot:
-        plt.pause(0.01)
-
-    return fig, ax
-
-
 def data_ready():
     data = {
         "discrete": {
@@ -273,9 +221,28 @@ def data_ready():
             for k, v in torch.load("all_result_comp.pt").items()
         },
     }
+    data = {
+        "discrete": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_result_discrete_new.pt").items()
+        },
+        "independent": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_result_independent_new.pt").items()
+        },
+        "independent_baseline": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_result_ind_base_new.pt").items()
+        },
+        # "comperative": {
+        #     k.replace("test/", ""): v
+        #     for k, v in torch.load("all_result_comp_new.pt").items()
+        # },
+    }
 
     # metrics = ["f1_weighted", "f1_pre_weighted", "f1_bc_ongoing", "bc_prediction"]
-    metrics = ["f1_weighted", "f1_pre_weighted", "f1_bc_ongoing"]
+    # metrics = ["f1_weighted", "f1_pre_weighted", "f1_bc_ongoing"]
+    metrics = ["f1_hold_shift", "f1_predict_shift", "f1_short_long", "f1_bc_prediction"]
     fig_data = {}
     for model, results in data.items():
         fig_data[model] = {}
@@ -291,7 +258,6 @@ def data_ready():
     fig, ax = plot_result_histogram(
         fig_data, metrics=metrics, figsize=(6.5, 3), plot=False
     )
-    ax.set_ylim([0.74, 0.9])
     ax.set_ylabel("F1")
     pad = 0.1
     plt.subplots_adjust(
@@ -455,9 +421,83 @@ if __name__ == "__main__":
     # result, model = test_single_model(
     #     run_path, event_kwargs=event_kwargs, bc_pred_pr_curve=False
     # )
-    # result, model = test_single_model(run_path, event_kwargs=event_kwargs, bc_pred_pr_curve=True)
-    #
-    # R = model.test_metric.compute()
+
+    # Choose a model
+    torch.tensor(data["discrete"]["test_loss"]).min(dim=0)  # 2
+    torch.tensor(data["discrete"]["f1_hold_shift"]).max(dim=0)  # 5
+    torch.tensor(data["discrete"]["f1_predict_shift"]).max(dim=0)  # 9
+    torch.tensor(data["discrete"]["f1_short_long"]).max(dim=0)  # 2
+    torch.tensor(data["discrete"]["f1_bc_prediction"]).max(dim=0)  # 3
+
+    run_path = discrete["3"]
+    result, model = test_single_model(
+        run_path, event_kwargs=event_kwargs, bc_pred_pr_curve=True
+    )
+    res = model.test_metric.compute()
+
+    preds = model.test_metric.bc_pred_pr.preds
+    target = model.test_metric.bc_pred_pr.target
+    preds = torch.cat(preds)
+    target = torch.cat(target)
+
+    n_pos = (target == 1).sum() / len(target)
+    n_neg = 1 - n_pos
+
+    fig, ax = plt.subplots(2, 1)
+    ax[0].hist(np.unique(preds.numpy().round(5)), bins=50)
+    plt.pause(0.1)
+
+    from sklearn.metrics import precision_recall_curve
+    from sklearn.metrics import PrecisionRecallDisplay
+
+    p_rev = 1 - preds
+    t_rev = 1 - target
+    p, r, t = precision_recall_curve(y_true=target, probas_pred=preds)
+    p1, r1, t1 = precision_recall_curve(y_true=target, probas_pred=p_rev)
+
+    a = PrecisionRecallDisplay.from_predictions(y_true=target, y_pred=preds)
+    PrecisionRecallDisplay.from_predictions(y_true=target, y_pred=p_rev, ax=a.ax_)
+    plt.show()
+
+    fig, ax = plot_pr_curve(
+        torch.from_numpy(p.copy()),
+        torch.from_numpy(r.copy()),
+        torch.from_numpy(t.copy()),
+        model="discrete",
+        color_auc_max="b",
+        # thresh_min=0.01,
+        plot=False,
+    )
+    _ = plot_pr_curve(
+        torch.from_numpy(p1.copy()),
+        torch.from_numpy(r1.copy()),
+        torch.from_numpy(t1.copy()),
+        model="discrete rev",
+        color_auc_max="g",
+        # thresh_min=0.01,
+        ax=ax,
+        plot=False,
+    )
+    ax[0].set_ylim([0, 1.05])
+    plt.pause(0.01)
+
+    precision, recall, thresholds = res["pr_curve_bc_pred"]
+
+    print(torch.tensor(data["independent"]["test_loss"]).min(dim=0))  # 2
+    print(torch.tensor(data["independent"]["f1_hold_shift"]).max(dim=0))  # 4
+    print(torch.tensor(data["independent"]["f1_predict_shift"]).max(dim=0))  # 8
+    print(torch.tensor(data["independent"]["f1_short_long"]).max(dim=0))  # 6
+    print(torch.tensor(data["independent"]["f1_bc_prediction"]).max(dim=0))  # 10
+
+    run_path = independent["10"]
+    result, model = test_single_model(
+        run_path, event_kwargs=event_kwargs, bc_pred_pr_curve=True
+    )
+    res = model.test_metric.compute()
+    precision, recall, thresholds = res["pr_curve_bc_pred"]
+
+    ind_res = res
+
     #
     # # torch.save(R, 'discrete_4.pt')
     #
@@ -469,27 +509,29 @@ if __name__ == "__main__":
     ###################################################################
     # R = torch.load("pr_bc_pred_data.pt")
     # precision, recall, thresholds = R["discrete"]
-    # precision = precision.cpu()
-    # recall = recall.cpu()
-    # thresholds = thresholds.cpu()
-    # print("precision: ", tuple(precision.shape))
-    # print("recall: ", tuple(recall.shape))
-    # print("thresholds: ", tuple(thresholds.shape))
     # precision, recall, thresholds = R["discrete"]
-    # fig, ax = plot_pr_curve(
-    #     precision.cpu(), recall.cpu(), thresholds.cpu(), model="Discrete", plot=False
-    # )
+    fig, ax = plot_pr_curve(
+        precision.cpu(),
+        recall.cpu(),
+        thresholds.cpu(),
+        thresh_min=0.01,
+        model="Discrete",
+        plot=False,
+    )
     # precision, recall, thresholds = R["independent"]
-    # _ = plot_pr_curve(
-    #     precision.cpu(),
-    #     recall.cpu(),
-    #     thresholds.cpu(),
-    #     model="Independent",
-    #     color_auc_max="b",
-    #     ax=ax,
-    #     plot=False,
-    # )
-    # plt.show()
+    prec, rec, thresh = ind_res["pr_curve_bc_pred"]
+    _ = plot_pr_curve(
+        prec.cpu(),
+        rec.cpu(),
+        thresh.cpu(),
+        model="Independent",
+        color_auc_max="b",
+        thresh_min=0.01,
+        ax=ax,
+        plot=False,
+    )
+    plt.show()
+
     #
     # precision, recall, thresholds = R["independent"]
     # print("precision: ", tuple(precision.shape))
@@ -513,23 +555,23 @@ if __name__ == "__main__":
     ###################################################################
     ###################################################################
 
-    all_result, all_data = test_models(
-        discrete, event_kwargs=event_kwargs, project_id="how_so/VPModel"
-    )
-    torch.save(all_result, "all_result_discrete_new.pt")
-    torch.save(all_data, "all_data_discrete_new.pt")
-    all_result, all_data = test_models(
-        independent, event_kwargs=event_kwargs, project_id="how_so/VPModel"
-    )
-    torch.save(all_result, "all_result_independent_new.pt")
-    torch.save(all_data, "all_data_independent_new.pt")
-    all_result, all_data = test_models(
-        independent_baseline, event_kwargs=event_kwargs, project_id="how_so/VPModel"
-    )
-    torch.save(all_result, "all_result_ind_base_new.pt")
-    torch.save(all_data, "all_data_ind_base_new.pt")
-    all_result, all_data = test_models(
-        comparative, event_kwargs=event_kwargs, project_id="how_so/VPModel"
-    )
-    torch.save(all_result, "all_result_comp_new.pt")
-    torch.save(all_data, "all_data_comp_new.pt")
+    # all_result, all_data = test_models(
+    #     discrete, event_kwargs=event_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_discrete_new.pt")
+    # torch.save(all_data, "all_data_discrete_new.pt")
+    # all_result, all_data = test_models(
+    #     independent, event_kwargs=event_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_independent_new.pt")
+    # torch.save(all_data, "all_data_independent_new.pt")
+    # all_result, all_data = test_models(
+    #     independent_baseline, event_kwargs=event_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_ind_base_new.pt")
+    # torch.save(all_data, "all_data_ind_base_new.pt")
+    # all_result, all_data = test_models(
+    #     comparative, event_kwargs=event_kwargs, project_id="how_so/VPModel"
+    # )
+    # torch.save(all_result, "all_result_comp_new.pt")
+    # torch.save(all_data, "all_data_comp_new.pt")

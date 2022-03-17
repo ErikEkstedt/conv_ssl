@@ -12,6 +12,7 @@ from vad_turn_taking.metrics import TurnTakingMetrics
 from vad_turn_taking.vad_projection import (
     VadLabel,
     ProjectionCodebook,
+    ProjectionIndependent,
 )
 from vad_turn_taking.vad import VAD
 from vad_turn_taking.backchannel import extract_backchannel_prediction_probs_independent
@@ -512,7 +513,7 @@ class ProjectionModel(nn.Module):
 
 
 class VadProjectionTask(pl.LightningModule):
-    def next_speaker_probs_independent(self, logits):
+    def next_speaker_probs_independent(self, logits, vad=None):
         """Probabilities for turn-taking task given the INDEPENDENT model"""
 
         def _normalize_reg_probs(probs):
@@ -542,12 +543,12 @@ class VadProjectionTask(pl.LightningModule):
             if self.conf["vad_projection"]["comparative"]:
                 out = self.next_speaker_probs_comparative(logits)
             else:
-                out = self.next_speaker_probs_independent(logits)
+                # out = self.next_speaker_probs_independent(logits, vad)
+                out = self.projection_codebook.get_probs(logits, vad=vad)
         elif self.conf["vad_projection"]["latent"]:
             out = self.net.future_encoder.get_probs(z_pred=logits, vad=vad)
         else:
             out = self.projection_codebook.get_probs(logits, vad)
-            out["pre_probs"] = None
         return out
 
 
@@ -602,6 +603,12 @@ class VPModel(VadProjectionTask):
         self.regression = conf["vad_projection"]["regression"]
         self.pre_frames = conf["vad_projection"]["regression_pre_frames"]
 
+        if self.regression:
+            self.projection_codebook = ProjectionIndependent(
+                pre_frames=conf["vad_projection"]["regression_pre_frames"],
+                bin_times=conf["vad_projection"]["bin_times"],
+                frame_hz=self.net.encoder.frame_hz,
+            )
         if not (self.regression or self.conf["vad_projection"]["latent"]):
             self.projection_codebook = ProjectionCodebook(
                 bin_times=conf["vad_projection"]["bin_times"],
@@ -615,7 +622,18 @@ class VPModel(VadProjectionTask):
         self.weight_decay = conf["optimizer"]["weight_decay"]
         self.save_hyperparameters()
 
-    def init_metric(self, conf, frame_hz, bc_pred_pr_curve=False, **event_kwargs):
+    def init_metric(
+        self,
+        conf,
+        frame_hz,
+        threshold_pred_shift=0.5,
+        threshold_short_long=0.5,
+        threshold_bc_pred=0.1,
+        bc_pred_pr_curve=False,
+        shift_pred_pr_curve=False,
+        long_short_pr_curve=False,
+        **event_kwargs,
+    ):
         # metric = TurnTakingMetrics(
         #     # don't extract events before a certain context is known
         #     min_context=conf["vad_projection"]["event_min_context"],
@@ -644,10 +662,12 @@ class VPModel(VadProjectionTask):
         #     discrete=not conf["vad_projection"]["regression"],  # discrete model or not
         # )
         metric = TurnTakingMetrics(
-            threshold_pred_shift=0.5,
-            threshold_short_long=0.5,
-            threshold_bc_pred=0.1,
+            threshold_pred_shift=threshold_pred_shift,
+            threshold_short_long=threshold_short_long,
+            threshold_bc_pred=threshold_bc_pred,
             bc_pred_pr_curve=bc_pred_pr_curve,
+            shift_pred_pr_curve=shift_pred_pr_curve,
+            long_short_pr_curve=long_short_pr_curve,
             frame_hz=frame_hz,
             **event_kwargs,
         )
@@ -866,17 +886,12 @@ class VPModel(VadProjectionTask):
     def validation_epoch_end(self, outputs) -> None:
         r = self.val_metric.compute()
         for metric_name, values in r.items():
-            if metric_name in ["pr_curve_bc_pred"]:
+            if metric_name.startswith("pr_curve"):
                 continue
             if isinstance(values, dict):
                 for val_name, val in values.items():
                     if val_name in ["tp", "tn", "fp", "fn"]:
                         continue
-                    if val_name in ["pr_curve_bc_pred"]:
-                        continue
-                    if "support" in val_name:
-                        continue
-
                     self.log(f"val_{metric_name}_{val_name}", val)
             else:
                 self.log(f"val_{metric_name}", values)
@@ -913,16 +928,20 @@ class VPModel(VadProjectionTask):
 
     def test_epoch_end(self, outputs) -> None:
         r = self.test_metric.compute()
-        for metric_name, values in r.items():
-            if metric_name in ["pr_curve_bc_pred"]:
-                continue
-            if isinstance(values, dict):
-                for val_name, val in values.items():
-                    if val_name in ["tp", "tn", "fp", "fn"]:
-                        continue
-                    self.log(f"test/{metric_name}_{val_name}", val)
-            else:
-                self.log(f"test/{metric_name}", values)
+
+        try:
+            for metric_name, values in r.items():
+                if metric_name.startswith("pr_curve"):
+                    continue
+                if isinstance(values, dict):
+                    for val_name, val in values.items():
+                        if val_name in ["tp", "tn", "fp", "fn"]:
+                            continue
+                        self.log(f"test/{metric_name}_{val_name}", val)
+                else:
+                    self.log(f"test/{metric_name}", values)
+        except Exception as e:
+            print("TEST_EPOCH_END FAILED.", e)
 
     @staticmethod
     def add_model_specific_args(parent_parser):
