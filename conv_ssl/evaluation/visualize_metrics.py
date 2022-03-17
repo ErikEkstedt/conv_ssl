@@ -301,9 +301,12 @@ def batch_view():
 
 
 def extract_loss_curve():
+
+    from conv_ssl.evaluation.evaluation import SymmetricSpeakersCallback
+
     run_path = discrete["3"]
     # Load data (same across folds)
-    dm = load_dm(vad_hz=100, horizon=2, batch_size=4, num_workers=4)
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=16, num_workers=4)
     # Load model and process test-set
     model = load_model(run_path=run_path, eval=True, strict=False)
     # if torch.cuda.is_available():
@@ -322,6 +325,18 @@ def extract_loss_curve():
     # )
     # model.test_metric = model.test_metric.to(model.device)
 
+    trainer = pl.Trainer(
+        gpus=-1,
+        deterministic=True,
+        logger=None,
+        callbacks=[SymmetricSpeakersCallback()],
+    )
+    result = trainer.test(model, dataloaders=dm.val_dataloader(), verbose=False)
+
+    loss_vector = model.loss_vector / model.loss_n
+
+    torch.save(loss_vector, "loss_vector.pt")
+
     n = 0
     losses = torch.zeros(1000, dtype=torch.float)
     dloader = dm.val_dataloader()
@@ -329,6 +344,7 @@ def extract_loss_curve():
         loss, _, _ = model.shared_step(to_device(batch, model.device), reduction="none")
         n += loss["vp"].shape[0]
         losses += loss["vp"].sum(0).cpu()
+        print(losses.device)
     losses /= n
 
     fig, ax = plt.subplots(1, 1)

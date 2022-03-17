@@ -565,6 +565,8 @@ class VPModel(VadProjectionTask):
         if "latent" not in conf["vad_projection"]:
             conf["vad_projection"]["latent"] = False
             conf["vad_projection"]["latent_dim"] = -1
+        self.loss_vector = torch.zeros(1000, dtype=torch.float)
+        self.loss_n = torch.tensor([0])
 
         self.net = ProjectionModel(conf)
 
@@ -827,9 +829,14 @@ class VPModel(VadProjectionTask):
             out,
             vad_projection_window=batch["vad_projection_window"],
             input_ids=batch.get("q", None),
-            reduction=reduction,
+            # reduction=reduction,
+            reduction="none",
         )
 
+        self.loss_vector += loss["vp"].sum(0).cpu()
+        self.loss_n += batch["vad"].shape[0]
+
+        loss = {"vp": loss["vp"].mean(), "total": loss["total"].mean()}
         return loss, out, batch
 
     def training_step(self, batch, batch_idx, **kwargs):
