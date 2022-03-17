@@ -234,10 +234,16 @@ def data_ready():
             k.replace("test/", ""): v
             for k, v in torch.load("all_result_ind_base_new.pt").items()
         },
-        # "comperative": {
-        #     k.replace("test/", ""): v
-        #     for k, v in torch.load("all_result_comp_new.pt").items()
-        # },
+    }
+    data = {
+        "discrete": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_res_discrete_new.pt").items()
+        },
+        "independent": {
+            k.replace("test/", ""): v
+            for k, v in torch.load("all_res_independent.pt").items()
+        },
     }
 
     # metrics = ["f1_weighted", "f1_pre_weighted", "f1_bc_ongoing", "bc_prediction"]

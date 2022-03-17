@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import torch
 import pytorch_lightning as pl
+from tqdm import tqdm
 
 from conv_ssl.plot_utils import plot_vad_oh, plot_pr_curve
 from conv_ssl.utils import everything_deterministic, to_device
@@ -10,6 +11,7 @@ from conv_ssl.evaluation.k_fold_aggregate import (
     independent,
     test_single_model,
 )
+from conv_ssl.evaluation.utils import load_dm, load_model
 
 event_kwargs = dict(
     shift_onset_cond=1,
@@ -182,7 +184,7 @@ def test_single_model(
     long_short_pr_curve=False,
     batch_size=16,
 ):
-    """test model"""
+    "g" "test model" ""
 
     # Load data (same across folds)
     dm = load_dm(vad_hz=100, horizon=2, batch_size=batch_size, num_workers=4)
@@ -214,16 +216,9 @@ def test_single_model(
     return result, model
 
 
-if __name__ == "__main__":
-
-    from conv_ssl.evaluation.utils import load_dm, load_model
-
-    pl.seed_everything(100)
-    everything_deterministic()
-
-    # update vad_projection metrics
-    run_path = discrete["3"]
+def PRCURVE():
     # run_path = independent["10"]
+    run_path = discrete["3"]
     # Aggregate
     res, model = test_single_model(
         run_path,
@@ -274,15 +269,16 @@ if __name__ == "__main__":
     )
     plt.pause(0.1)
 
-    print(model)
 
-    # # Model
-    # model = load_model(run_path=run_path, eval=True, strict=False)
-    # model = model.eval()
-    # model.test_metric = model.init_metric(
-    #     model.conf, model.frame_hz, bc_pred_pr_curve=False, **event_kwargs
-    # )
-    # model.test_metric = model.test_metric.to(model.device)
+def batch_view():
+    # Model
+    run_path = discrete["3"]
+    model = load_model(run_path=run_path, eval=True, strict=False)
+    model = model.eval()
+    model.test_metric = model.init_metric(
+        model.conf, model.frame_hz, bc_pred_pr_curve=False, **event_kwargs
+    )
+    model.test_metric = model.test_metric.to(model.device)
 
     dm = load_dm(batch_size=16)
     diter = iter(dm.test_dataloader())
@@ -303,13 +299,46 @@ if __name__ == "__main__":
     fig, ax = plot_batch(probs, events, batch["vad"], metric="predict_shift")
     fig, ax = plot_batch(probs, events, batch["vad"], metric="long")
 
-    # UPDATE METRICS
-    model.test_metric.update(
-        p=probs["p"],
-        pre_probs=probs.get("pre_probs", None),
-        pw=None,
-        bc_pred_probs=probs.get("bc_prediction", None),
-        events=events,
-    )
 
-    metric = "predict_bc"
+def extract_loss_curve():
+    run_path = discrete["3"]
+    # Load data (same across folds)
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=4, num_workers=4)
+    # Load model and process test-set
+    model = load_model(run_path=run_path, eval=True, strict=False)
+    # if torch.cuda.is_available():
+    #     model = model.to("cuda")
+
+    # model.test_metric = model.init_metric(
+    #     model.conf,
+    #     model.frame_hz,
+    #     # threshold_pred_shift=threshold_pred_shift,
+    #     # threshold_short_long=threshold_short_long,
+    #     # threshold_bc_pred=threshold_bc_pred,
+    #     # bc_pred_pr_curve=bc_pred_pr_curve,
+    #     # shift_pred_pr_curve=shift_pred_pr_curve,
+    #     # long_short_pr_curve=long_short_pr_curve,
+    #     **event_kwargs,
+    # )
+    # model.test_metric = model.test_metric.to(model.device)
+
+    n = 0
+    losses = torch.zeros(1000, dtype=torch.float)
+    dloader = dm.val_dataloader()
+    for batch in tqdm(dloader, total=len(dloader)):
+        loss, _, _ = model.shared_step(to_device(batch, model.device), reduction="none")
+        n += loss["vp"].shape[0]
+        losses += loss["vp"].sum(0).cpu()
+    losses /= n
+
+    fig, ax = plt.subplots(1, 1)
+    ax.plot()
+    result = test(model, dm, online=False)
+
+
+if __name__ == "__main__":
+
+    pl.seed_everything(100)
+    everything_deterministic()
+
+    extract_loss_curve()
