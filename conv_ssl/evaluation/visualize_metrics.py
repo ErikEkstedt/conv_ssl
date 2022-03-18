@@ -2,6 +2,7 @@ from os.path import join, dirname
 from os import makedirs
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import time
 
 import torch
 import pytorch_lightning as pl
@@ -380,8 +381,8 @@ def eval_single_model(
     plot=False,
 ):
     """
-    # kfold = 4
     # model_name = "independent"
+    # kfold = 4
     # model_name = 'discrete'
     # kfold = 5
     """
@@ -510,9 +511,6 @@ def eval_single_model(
 
 
 def debug_curves():
-
-    import time
-
     t = time.time()
     all_score = {}
     for model in ["discrete"]:
@@ -526,64 +524,94 @@ def debug_curves():
                     scores[k].append(v)
         all_score[model] = scores
     t = time.time() - t
-    torch.save(all_score, "assets/score")
+    torch.save(all_score, "assets/score/all_score.pt")
     print(f"Time: {round(t, 2)}s")
 
-    precision, recall, thresholds = model.test_metric.bc_pred_pr.compute()
+    all_score = torch.load("assets/score/all_score.pt")
 
-    # New with same numbers positive label=0
-    pr = PrecisionRecallCurve(pos_label=0)
-    pr.update(preds.unsqueeze(0), targets.unsqueeze(0))
-    p_new, r_new, t_new = pr.compute()
+    scores = {
+        "loss": [],
+        "f1_hold_shift": [],
+        "f1_predict_shift": [],
+        "f1_short_long": [],
+        "f1_bc_prediction": [],
+        "threshold_pred_shift": [],
+        "threshold_short_long": [],
+        "threshold_bc_pred": [],
+    }
+    for metric in scores.keys():
+        for model, model_scores in all_score.items():
+            t = torch.tensor(model_scores[metric])
+            scores[metric].append(t.mean())
 
-    # New with reversed numbers positive label=1
-    pred_rev = 1 - preds
-    targ_rev = 1 - targets
-    pr = PrecisionRecallCurve(pos_label=1)
-    pr.update(preds.unsqueeze(0), targets.unsqueeze(0))
-    p_rev, r_rev, t_rev = pr.compute()
+    f1_metrics = [
+        "f1_hold_shift",
+        "f1_predict_shift",
+        "f1_bc_prediction",
+        "f1_short_long",
+    ]
+    models = {}
+    for model, model_scores in all_score.items():
+        models[model] = {"mean": [], "std": [], "thresh": {"mean": [], "std": []}}
+        for metric in f1_metrics:
+            t = torch.tensor(model_scores[metric])
+            models[model]["mean"].append(t.mean())
+            models[model]["std"].append(t.std())
+            thresh = None
+            if "short" in metric:
+                thresh = torch.tensor(model_scores["threshold_short_long"])
+            elif "predict_shift" in metric:
+                thresh = torch.tensor(model_scores["threshold_pred_shift"])
+            elif "bc_prediction" in metric:
+                thresh = torch.tensor(model_scores["threshold_bc_pred"])
+            if thresh is not None:
+                models[model]["thresh"]["mean"].append(thresh.mean())
+                models[model]["thresh"]["std"].append(thresh.std())
 
-    fig, ax = plt.subplots(3, 1, figsize=(12, 8))
-    _ = plot_pr_curve(
-        precision=p.cpu(),
-        recall=r.cpu(),
-        thresholds=t.cpu(),
-        model=label,
-        color_auc_max="b",
-        thresh_min=0.01,
-        ax=ax,
-        plot=False,
+    import plotly.graph_objects as go
+
+    metrics = ["f1_hold_shift", "f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
+    fig = go.Figure(
+        data=[
+            go.Bar(name="Discrete", x=metrics, y=models["discrete"]["mean"]),
+            go.Bar(name="Independent", x=metrics, y=models["independent"]["mean"]),
+            go.Bar(
+                name="Independent-baseline",
+                x=metrics,
+                y=models["independent_baseline"]["mean"],
+            ),
+        ]
     )
-    _ = plot_pr_curve(
-        precision=p_rev.cpu(),
-        recall=r_rev.cpu(),
-        thresholds=t_rev.cpu(),
-        model=label + " rev",
-        color_auc_max="r",
-        thresh_min=0.01,
-        ax=ax,
-        plot=False,
+    # Change the bar mode
+    fig.update_layout(barmode="group")
+    fig.show()
+
+    import plotly.graph_objects as go
+
+    metrics = ["f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
+    fig = go.Figure(
+        data=[
+            go.Bar(name="Discrete", x=metrics, y=models["discrete"]["thresh"]["mean"]),
+            go.Bar(
+                name="Independent", x=metrics, y=models["independent"]["thresh"]["mean"]
+            ),
+            go.Bar(
+                name="Independent-baseline",
+                x=metrics,
+                y=models["independent_baseline"]["thresh"]["mean"],
+            ),
+        ]
     )
-    _ = plot_pr_curve(
-        precision=p_new.cpu(),
-        recall=r_new.cpu(),
-        thresholds=t_new.cpu(),
-        model=label + " new pos_label=0",
-        color_auc_max="r",
-        thresh_min=0.01,
-        ax=ax,
-        plot=False,
-    )
-    for a in ax:
-        a.legend(loc="upper right")
-        a.set_ylim([0, 1.05])
-    plt.tight_layout()
-    plt.pause(0.1)
+    # Change the bar mode
+    fig.update_layout(barmode="group")
+    fig.show()
 
 
 def batch_view():
+
     # Model
-    run_path = discrete["3"]
+    run_path = discrete["0"]
+    # run_path = independent["4"]
     model = load_model(run_path=run_path, eval=True, strict=False)
     model = model.eval()
     model.test_metric = model.init_metric(
@@ -593,10 +621,8 @@ def batch_view():
 
     dm = load_dm(batch_size=16)
     diter = iter(dm.test_dataloader())
-
     batch = next(diter)
     batch = to_device(batch)
-
     # BATCH
     with torch.no_grad():
         events = model.test_metric.extract_events(batch["vad"])
@@ -661,16 +687,31 @@ def extract_loss_curve():
     #     print(losses.device)
     # losses /= n
 
+    # loss_vector = torch.load("loss_vector_full.pt")
+    # ind = False
+    loss_vector = torch.load("loss_vector_full_ind.pt")
+    ind = True
+
     M = loss_vector.mean()
-    S = loss_vector.std(unbiased=True)
-    m = loss_vector.mean(dim=0)
-    s = loss_vector.std(dim=0, unbiased=True)
+    if ind:
+        m = loss_vector.mean(dim=0).mean(dim=-1).mean(dim=-1)
+        # average over bins and speaker
+        s = loss_vector.mean(dim=-1).mean(dim=-1)
+        S = s.std(unbiased=True)
+        s = s.std(dim=0, unbiased=True)
+    else:
+        S = loss_vector.std(unbiased=True)
+        m = loss_vector.mean(dim=0)
+        s = loss_vector.std(dim=0, unbiased=True)
     fig, ax = plt.subplots(1, 1)
     ax.plot(m, alpha=0.8, label="avg(t)", color="b")
     ax.plot(s, color="r", alpha=0.8, label="std(t)")
     ax.hlines(y=M, xmin=0, xmax=1000, label="Average", color="darkblue", linewidth=3)
     ax.hlines(y=S, xmin=0, xmax=1000, label="Std", color="darkred", linewidth=3)
-    ax.set_ylabel("Cross Entropy Loss")
+    if ind:
+        ax.set_ylabel("BCE Loss")
+    else:
+        ax.set_ylabel("Cross Entropy Loss")
     ax.set_xlabel("time step (10ms)")
     ax.legend(loc="upper right")
     plt.pause(0.1)
