@@ -303,23 +303,26 @@ def get_curves(preds, target, pos_label=1, thresholds=None, EPS=1e-6):
     }
 
 
-def plot_curve(y, thresholds, label, ax, min_thresh=0, max_thresh=1, color="b"):
-    if min_thresh > 0:
-        y = y[thresholds >= min_thresh]
-        thresholds = thresholds[thresholds >= min_thresh]
-
-    if max_thresh < 1:
-        y = y[thresholds <= max_thresh]
-        thresholds = thresholds[thresholds <= max_thresh]
-
-    y_max, y_idx = y.max(0)
-    th_max = round(thresholds[y_idx].item(), 2)
+def plot_curve(y, thresholds, label, ax, min_thresh=0, max_thresh=1, color="b", plot_guide_lines=False):
+    ym = y[thresholds >= min_thresh]
+    ts = thresholds[thresholds >= min_thresh]
+    ym = ym[ts <= max_thresh]
+    ts = ts[ts <= max_thresh]
+    y_max, y_idx = ym.max(0)
+    th_max = round(ts[y_idx].item(), 2)
     y_max = round(y_max.item(), 3)
 
     ax.plot(thresholds, y.cpu(), label=label + f"({th_max}, {y_max})", color=color)
     ax.scatter(th_max, y_max, color=color)
     ax.vlines(th_max, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color=color)
     ax.hlines(y_max, xmin=0, xmax=th_max, linestyle="dashed", alpha=0.6, color=color)
+
+    if plot_guide_lines:
+        ax.hlines(y=0.5, xmin=0, xmax=1, linestyle="dashed", color=color, label='BAcc 0.5')
+        # if min_thresh > 0:
+        #     ax.vlines(min_thresh, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color='k', linewidth=-.5)
+        # if max_thresh < 1:
+        #     ax.vlines(max_thresh, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color='k', linewidth=-.5)
     return ax
 
 
@@ -342,6 +345,7 @@ def plot_all_curves(c, min_thresh, title, figsize=(9, 6), plot=False):
         label="BAcc ",
         ax=ax,
         color="r",
+        plot_guide_lines=True,
     )
     ax = plot_curve(
         c["auc1"],
@@ -510,7 +514,36 @@ def eval_single_model(
     }
 
 
+
 def debug_curves():
+
+    preds = torch.load("assets/score/discrete/kfold0_discrete_predictions.pt")
+    curves = torch.load("assets/score/discrete/kfold0_discrete_curves.pt")
+
+    bc_preds = preds['bc_preds'] 
+    p, t = bc_preds['preds'], bc_preds['target']
+
+    w1 = torch.where(t == 1)
+    p1 = p[w1]
+    t1 = t[w1]
+    # p1m = p1.mean()
+    # p1s = p1.std()
+
+    w0 = torch.where(t == 0)
+    t0 = t[w0]
+    p0 = 1-p[w0]
+    # p0m = p0.mean()
+    # p0s = p0.std()
+    new_preds = torch.cat((p1, p0))
+    new_target = torch.cat((t1, t0))
+
+    c = get_curves(new_preds, new_target)
+
+    fig, ax = plot_all_curves(c, min_thresh=0.01, title='BC pred', figsize=(9, 6), plot=True)
+
+    fig, ax = plot_all_curves(curves['shift_preds'], min_thresh=0.01, title='Shift pred', figsize=(9, 6), plot=True)
+    fig, ax = plot_all_curves(curves['long_short'], min_thresh=0.01, title='Long/Short', figsize=(9, 6), plot=True)
+
     t = time.time()
     all_score = {}
     for model in ["discrete"]:
