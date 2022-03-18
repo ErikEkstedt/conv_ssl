@@ -516,33 +516,7 @@ def eval_single_model(
 
 
 def debug_curves():
-
-    preds = torch.load("assets/score/discrete/kfold0_discrete_predictions.pt")
-    curves = torch.load("assets/score/discrete/kfold0_discrete_curves.pt")
-
-    bc_preds = preds['bc_preds'] 
-    p, t = bc_preds['preds'], bc_preds['target']
-
-    w1 = torch.where(t == 1)
-    p1 = p[w1]
-    t1 = t[w1]
-    # p1m = p1.mean()
-    # p1s = p1.std()
-
-    w0 = torch.where(t == 0)
-    t0 = t[w0]
-    p0 = 1-p[w0]
-    # p0m = p0.mean()
-    # p0s = p0.std()
-    new_preds = torch.cat((p1, p0))
-    new_target = torch.cat((t1, t0))
-
-    c = get_curves(new_preds, new_target)
-
-    fig, ax = plot_all_curves(c, min_thresh=0.01, title='BC pred', figsize=(9, 6), plot=True)
-
-    fig, ax = plot_all_curves(curves['shift_preds'], min_thresh=0.01, title='Shift pred', figsize=(9, 6), plot=True)
-    fig, ax = plot_all_curves(curves['long_short'], min_thresh=0.01, title='Long/Short', figsize=(9, 6), plot=True)
+    import plotly.graph_objects as go
 
     t = time.time()
     all_score = {}
@@ -601,8 +575,6 @@ def debug_curves():
                 models[model]["thresh"]["mean"].append(thresh.mean())
                 models[model]["thresh"]["std"].append(thresh.std())
 
-    import plotly.graph_objects as go
-
     metrics = ["f1_hold_shift", "f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
     fig = go.Figure(
         data=[
@@ -618,9 +590,6 @@ def debug_curves():
     # Change the bar mode
     fig.update_layout(barmode="group")
     fig.show()
-
-    import plotly.graph_objects as go
-
     metrics = ["f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
     fig = go.Figure(
         data=[
@@ -638,6 +607,28 @@ def debug_curves():
     # Change the bar mode
     fig.update_layout(barmode="group")
     fig.show()
+
+    # SINGLE
+    # preds = torch.load("assets/score/discrete/kfold0_discrete_predictions.pt")
+    # curves = torch.load("assets/score/discrete/kfold0_discrete_curves.pt")
+    # bc_preds = preds['bc_preds'] 
+    # p, t = bc_preds['preds'], bc_preds['target']
+    # w1 = torch.where(t == 1)
+    # p1 = p[w1]
+    # t1 = t[w1]
+    # # p1m = p1.mean()
+    # # p1s = p1.std()
+    # w0 = torch.where(t == 0)
+    # t0 = t[w0]
+    # p0 = 1-p[w0]
+    # # p0m = p0.mean()
+    # # p0s = p0.std()
+    # new_preds = torch.cat((p1, p0))
+    # new_target = torch.cat((t1, t0))
+    # c = get_curves(new_preds, new_target)
+    # fig, ax = plot_all_curves(c, min_thresh=0.01, title='BC pred', figsize=(9, 6), plot=True)
+    # fig, ax = plot_all_curves(curves['shift_preds'], min_thresh=0.01, title='Shift pred', figsize=(9, 6), plot=True)
+    # fig, ax = plot_all_curves(curves['long_short'], min_thresh=0.01, title='Long/Short', figsize=(9, 6), plot=True)
 
 
 def batch_view():
