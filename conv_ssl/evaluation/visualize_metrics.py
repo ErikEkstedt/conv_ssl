@@ -7,16 +7,14 @@ import time
 import torch
 import pytorch_lightning as pl
 
-from torchmetrics import PrecisionRecallCurve
-
-from conv_ssl.plot_utils import plot_vad_oh, plot_pr_curve
+from conv_ssl.plot_utils import plot_vad_oh  # , plot_pr_curve
 from conv_ssl.utils import everything_deterministic, to_device
 from conv_ssl.evaluation.evaluation import test
 from conv_ssl.evaluation.k_fold_aggregate import (
     discrete,
     independent,
     independent_baseline,
-    test_single_model,
+    comparative,
 )
 from conv_ssl.evaluation.utils import load_dm, load_model
 
@@ -191,6 +189,7 @@ def test_single_model(
     shift_pred_pr_curve=False,
     long_short_pr_curve=False,
     batch_size=16,
+    split="test",
 ):
     """test model"""
 
@@ -220,7 +219,7 @@ def test_single_model(
     )
     model.test_metric = model.test_metric.to(model.device)
 
-    result = test(model, dm, online=False)
+    result = test(model, dm, online=False, split=split)
     return result, model
 
 
@@ -303,7 +302,16 @@ def get_curves(preds, target, pos_label=1, thresholds=None, EPS=1e-6):
     }
 
 
-def plot_curve(y, thresholds, label, ax, min_thresh=0, max_thresh=1, color="b", plot_guide_lines=False):
+def plot_curve(
+    y,
+    thresholds,
+    label,
+    ax,
+    min_thresh=0,
+    max_thresh=1,
+    color="b",
+    plot_guide_lines=False,
+):
     ym = y[thresholds >= min_thresh]
     ts = thresholds[thresholds >= min_thresh]
     ym = ym[ts <= max_thresh]
@@ -318,7 +326,9 @@ def plot_curve(y, thresholds, label, ax, min_thresh=0, max_thresh=1, color="b", 
     ax.hlines(y_max, xmin=0, xmax=th_max, linestyle="dashed", alpha=0.6, color=color)
 
     if plot_guide_lines:
-        ax.hlines(y=0.5, xmin=0, xmax=1, linestyle="dashed", color=color, label='BAcc 0.5')
+        ax.hlines(
+            y=0.5, xmin=0, xmax=1, linestyle="dashed", color=color, label="BAcc 0.5"
+        )
         # if min_thresh > 0:
         #     ax.vlines(min_thresh, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color='k', linewidth=-.5)
         # if max_thresh < 1:
@@ -383,6 +393,7 @@ def eval_single_model(
     project_id="how_so/VPModel",
     verbose=False,
     plot=False,
+    threshold_split="val",
 ):
     """
     # model_name = "independent"
@@ -397,6 +408,8 @@ def eval_single_model(
         id = independent[str(kfold)]
     elif model_name == "independent_baseline":
         id = independent_baseline[str(kfold)]
+    elif model_name == "comparative":
+        id = comparative[str(kfold)]
     else:
         raise NotImplementedError("")
 
@@ -404,6 +417,7 @@ def eval_single_model(
     makedirs(root, exist_ok=True)
     predictions_path = f"{root}/{model_name}/kfold{kfold}_{model_name}_predictions.pt"
     curve_path = f"{root}/{model_name}/kfold{kfold}_{model_name}_curves.pt"
+    result_path = f"{root}/{model_name}/kfold{kfold}_{model_name}_result.pt"
     run_path = join(project_id, id)
 
     if verbose:
@@ -424,6 +438,7 @@ def eval_single_model(
         shift_pred_pr_curve=True,
         long_short_pr_curve=True,
         batch_size=16,
+        split=threshold_split,
     )
 
     ############################################
@@ -496,8 +511,10 @@ def eval_single_model(
         shift_pred_pr_curve=False,
         long_short_pr_curve=False,
         batch_size=16,
+        split="test",
     )
     res = res[0]
+    torch.save(res, result_path)
 
     return {
         "loss": res["test_loss"],
@@ -514,16 +531,18 @@ def eval_single_model(
     }
 
 
-
-def debug_curves():
-    import plotly.graph_objects as go
+def Extract_Final_Scores():
+    # import plotly.graph_objects as go
 
     t = time.time()
     all_score = {}
-    for model in ["discrete"]:
+    # for model in ["comparative"]:
+    for model in ["independent", "independent_baseline", "discrete"]:
         scores = {}
         for kfold in range(11):
-            score = eval_single_model(model_name="discrete", kfold=kfold, verbose=True)
+            score = eval_single_model(
+                model_name=model, kfold=kfold, verbose=True, threshold_split="val"
+            )
             for k, v in score.items():
                 if k not in scores:
                     scores[k] = [v]
@@ -531,10 +550,29 @@ def debug_curves():
                     scores[k].append(v)
         all_score[model] = scores
     t = time.time() - t
-    torch.save(all_score, "assets/score/all_score.pt")
+    torch.save(all_score, "assets/score/all_score_new_comp.pt")
     print(f"Time: {round(t, 2)}s")
 
-    all_score = torch.load("assets/score/all_score.pt")
+    ##########################################################
+    # Comparative
+    for kfold, id in comparative.items():
+        run_path = join("how_so/VPModel", id)
+        _, model = test_single_model(
+            run_path,
+            event_kwargs=event_kwargs,
+            threshold_pred_shift=0.5,
+            threshold_short_long=0.5,
+            threshold_bc_pred=0.1,
+            bc_pred_pr_curve=False,
+            shift_pred_pr_curve=False,
+            long_short_pr_curve=False,
+            batch_size=16,
+            split="test",
+        )
+
+        break
+
+    all_score = torch.load("assets/score/all_score_new.pt")
 
     scores = {
         "loss": [],
@@ -575,60 +613,108 @@ def debug_curves():
                 models[model]["thresh"]["mean"].append(thresh.mean())
                 models[model]["thresh"]["std"].append(thresh.std())
 
-    metrics = ["f1_hold_shift", "f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
-    fig = go.Figure(
-        data=[
-            go.Bar(name="Discrete", x=metrics, y=models["discrete"]["mean"]),
-            go.Bar(name="Independent", x=metrics, y=models["independent"]["mean"]),
-            go.Bar(
-                name="Independent-baseline",
-                x=metrics,
-                y=models["independent_baseline"]["mean"],
-            ),
-        ]
-    )
-    # Change the bar mode
-    fig.update_layout(barmode="group")
-    fig.show()
-    metrics = ["f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
-    fig = go.Figure(
-        data=[
-            go.Bar(name="Discrete", x=metrics, y=models["discrete"]["thresh"]["mean"]),
-            go.Bar(
-                name="Independent", x=metrics, y=models["independent"]["thresh"]["mean"]
-            ),
-            go.Bar(
-                name="Independent-baseline",
-                x=metrics,
-                y=models["independent_baseline"]["thresh"]["mean"],
-            ),
-        ]
-    )
-    # Change the bar mode
-    fig.update_layout(barmode="group")
-    fig.show()
 
-    # SINGLE
-    # preds = torch.load("assets/score/discrete/kfold0_discrete_predictions.pt")
-    # curves = torch.load("assets/score/discrete/kfold0_discrete_curves.pt")
-    # bc_preds = preds['bc_preds'] 
-    # p, t = bc_preds['preds'], bc_preds['target']
-    # w1 = torch.where(t == 1)
-    # p1 = p[w1]
-    # t1 = t[w1]
-    # # p1m = p1.mean()
-    # # p1s = p1.std()
-    # w0 = torch.where(t == 0)
-    # t0 = t[w0]
-    # p0 = 1-p[w0]
-    # # p0m = p0.mean()
-    # # p0s = p0.std()
-    # new_preds = torch.cat((p1, p0))
-    # new_target = torch.cat((t1, t0))
-    # c = get_curves(new_preds, new_target)
-    # fig, ax = plot_all_curves(c, min_thresh=0.01, title='BC pred', figsize=(9, 6), plot=True)
-    # fig, ax = plot_all_curves(curves['shift_preds'], min_thresh=0.01, title='Shift pred', figsize=(9, 6), plot=True)
-    # fig, ax = plot_all_curves(curves['long_short'], min_thresh=0.01, title='Long/Short', figsize=(9, 6), plot=True)
+def ANOVA():
+    import scipy.stats as stats
+    import numpy as np
+    from statsmodels.stats.multicomp import pairwise_tukeyhsd
+
+    # all_score = torch.load("assets/score/all_score_new.pt")
+    all_score = torch.load("assets/score/all_score.pt")
+    result = {}
+    for model in ["discrete", "independent", "independent_baseline"]:
+        result[model] = {
+            "SH": round(
+                torch.tensor(all_score[model]["f1_hold_shift"]).mean().item(), 3
+            ),
+            "SL": round(
+                torch.tensor(all_score[model]["f1_short_long"]).mean().item(), 3
+            ),
+            "S-pred": round(
+                torch.tensor(all_score[model]["f1_predict_shift"]).mean().item(), 3
+            ),
+            "BC-pred": round(
+                torch.tensor(all_score[model]["f1_bc_prediction"]).mean().item(), 3
+            ),
+        }
+    statistics = {
+        "SH": {},
+        "SL": {},
+        "S-pred": {},
+        "BC-pred": {},
+    }
+    for ii, (metric, new_metric) in enumerate(
+        zip(
+            ["f1_hold_shift", "f1_short_long", "f1_predict_shift", "f1_bc_prediction"],
+            ["SH", "SL", "S-pred", "BC-pred"],
+        )
+    ):
+        m_discrete = all_score["discrete"][metric]
+        m_ind = all_score["independent"][metric]
+        m_ind_base = all_score["independent_baseline"][metric]
+        anova_result = stats.f_oneway(m_discrete, m_ind, m_ind_base)
+        statistics[new_metric] = anova_result.pvalue
+        # ad-Hoc test
+        d_vs_i = stats.ttest_ind(m_discrete, m_ind)
+        d_vs_ib = stats.ttest_ind(m_discrete, m_ind_base)
+        statistics[f"{new_metric}_t_test_d_vs_i"] = d_vs_i.pvalue
+        statistics[f"{new_metric}_t_test_d_vs_ib"] = d_vs_ib.pvalue
+    for model, row in result.items():
+        print(model, row)
+    print("-" * 30)
+    for metric, pval in statistics.items():
+        print(metric, pval)
+
+    # print(result)
+    print(statistics)
+
+    for model, scores in all_score.items():
+        print(model)
+        for metric, val in scores.items():
+            if "f1" in metric:
+                # print(metric, torch.tensor(val).std())
+                print(metric, round(torch.tensor(val).mean().item(), 3))
+            # if "threshold" in metric:
+            #     t = torch.stack(val)
+            #     t0 = round(t.min().item(), 3)
+            #     t1 = round(t.max().item(), 3)
+            #     s = round(t.std().item(), 3)
+            # print(f"{metric} ({t0}, {t1}), s={s}")
+        print("-" * 30)
+
+    fig, ax = plt.subplots(4, 1)
+    for ii, metric in enumerate(
+        ["f1_hold_shift", "f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
+    ):
+        m_discrete = all_score["discrete"][metric]
+        m_ind = all_score["independent"][metric]
+        m_ind_base = all_score["independent_baseline"][metric]
+        anova_result = stats.f_oneway(m_discrete, m_ind, m_ind_base)
+        print(f"{metric} p={anova_result.pvalue} ({round(anova_result.statistic, 3)})")
+        # Post-Hoc test
+        d_vs_i = stats.ttest_ind(m_discrete, m_ind)
+        d_vs_ib = stats.ttest_ind(m_discrete, m_ind_base)
+        print(f"Discrete vs Independent t-test: {d_vs_i.pvalue}")
+        print(f"Discrete vs Independent Base t-test: {d_vs_ib.pvalue}")
+        print("-" * 50)
+        # Tukey
+        endog = m_discrete + m_ind + m_ind_base
+        groups = (
+            ["discrete"] * len(m_discrete)
+            + ["ind"] * len(m_ind)
+            + ["ind_base"] * len(m_ind_base)
+        )
+        tukey = pairwise_tukeyhsd(
+            endog=endog, groups=groups, alpha=0.05
+        )  # Significance level
+        tukey.plot_simultaneous(ax=ax[ii])  # Plot group confidence intervals
+        ax[ii].set_ylabel(metric)
+        xmin, xmax = ax[ii].get_xlim()
+        xmid = xmin + (xmax - xmin) / 2
+        ax[ii].set_xlim([xmid - 0.04, xmid + 0.04])
+        ax[ii].set_title("")
+    plt.tight_layout()
+    plt.show()
 
 
 def batch_view():

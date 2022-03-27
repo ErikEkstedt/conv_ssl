@@ -53,7 +53,7 @@ class SymmetricSpeakersCallback(Callback):
         batch = get_symmetric_batch(batch)
 
 
-def test(model, dm, max_batches=None, project="VPModelTest", online=True):
+def test(model, dm, max_batches=None, project="VPModelTest", online=True, split="test"):
     logger = None
     if online:
         savedir = "runs/" + project
@@ -80,7 +80,17 @@ def test(model, dm, max_batches=None, project="VPModelTest", online=True):
             logger=logger,
             callbacks=[SymmetricSpeakersCallback()],
         )
-    result = trainer.test(model, dataloaders=dm.test_dataloader(), verbose=False)
+    if split == "test":
+        print("TEST SPLIT")
+        result = trainer.test(model, dataloaders=dm.test_dataloader(), verbose=False)
+    elif split in ["val", "validation"]:
+        print("VALIDATION SPLIT")
+        result = trainer.test(model, dataloaders=dm.val_dataloader(), verbose=False)
+    elif split == "train":
+        print("TRAIN SPLIT")
+        result = trainer.test(model, dataloaders=dm.train_dataloader(), verbose=False)
+    else:
+        raise NotImplementedError(f"split: {split} not recognized.")
     return result
 
 

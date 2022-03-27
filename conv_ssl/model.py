@@ -565,8 +565,9 @@ class VPModel(VadProjectionTask):
         if "latent" not in conf["vad_projection"]:
             conf["vad_projection"]["latent"] = False
             conf["vad_projection"]["latent_dim"] = -1
-        self.loss_vector = torch.zeros(1000, dtype=torch.float)
-        self.loss_n = torch.tensor([0])
+        # self.loss_vector = torch.zeros(1000, dtype=torch.float)
+        # self.loss_vector = []
+        # self.loss_n = torch.tensor([0])
 
         self.net = ProjectionModel(conf)
 
@@ -748,7 +749,7 @@ class VPModel(VadProjectionTask):
                     )
                 else:  # BCE
                     loss["vp"] = F.binary_cross_entropy_with_logits(
-                        out["logits_vp"], vad_projection_window
+                        out["logits_vp"], vad_projection_window, reduction=reduction
                     )
         elif self.conf["vad_projection"]["latent"]:
             z_pred = out["logits_vp"]  # Not logits but projected z vectors
@@ -829,12 +830,13 @@ class VPModel(VadProjectionTask):
             out,
             vad_projection_window=batch["vad_projection_window"],
             input_ids=batch.get("q", None),
-            # reduction=reduction,
-            reduction="none",
+            reduction=reduction,
+            # reduction="none",
         )
 
-        self.loss_vector += loss["vp"].sum(0).cpu()
-        self.loss_n += batch["vad"].shape[0]
+        # self.loss_vector += loss["vp"].sum(0).cpu()
+        # self.loss_vector.append(loss["vp"].cpu())
+        # self.loss_n += batch["vad"].shape[0]
 
         loss = {"vp": loss["vp"].mean(), "total": loss["total"].mean()}
         return loss, out, batch
