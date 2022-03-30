@@ -125,7 +125,9 @@ def test_single_model_OLD(run_path, metric_kwargs, bc_pred_pr_curve=False):
     return result, model
 
 
-def test_single_model(run_path, event_kwargs, bc_pred_pr_curve=False, batch_size=16):
+def test_single_model(
+    run_path, event_kwargs, bc_pred_pr_curve=False, batch_size=16, split="test"
+):
     # Load data (same across folds)
     dm = load_dm(vad_hz=100, horizon=2, batch_size=batch_size, num_workers=4)
 
@@ -143,7 +145,7 @@ def test_single_model(run_path, event_kwargs, bc_pred_pr_curve=False, batch_size
         model.conf, model.frame_hz, bc_pred_pr_curve=bc_pred_pr_curve, **event_kwargs
     )
     model.test_metric = model.test_metric.to(model.device)
-    result = test(model, dm, online=False)
+    result = test(model, dm, online=False, split=split)
     return result, model
 
 
