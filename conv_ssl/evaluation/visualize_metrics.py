@@ -611,8 +611,7 @@ def eval_single_model(
     long_short_threshold = get_best_thresh("long_short", "f1")
 
     #############################################
-    # get scores
-    # Aggregate
+    # get real scores
     res, model = test_single_model(
         run_path,
         event_kwargs=event_kwargs,
@@ -667,21 +666,28 @@ def Extract_Final_Scores():
 
     ##########################################################
     # Comparative
+
+    scores = {}
     for kfold, id in comparative.items():
         run_path = join("how_so/VPModel", id)
-        _, model = test_single_model(
+        res, model = test_single_model(
             run_path,
             event_kwargs=event_kwargs,
             threshold_pred_shift=0.5,
             threshold_short_long=0.5,
-            threshold_bc_pred=0.1,
+            threshold_bc_pred=0.5,
             bc_pred_pr_curve=False,
             shift_pred_pr_curve=False,
             long_short_pr_curve=False,
             batch_size=16,
             split="test",
         )
-        break
+        for k, v in res.items():
+            if k not in scores:
+                scores[k] = [v]
+            else:
+                scores[k].append(v)
+        print(scores)
 
     all_score = torch.load("assets/score/all_score_new.pt")
 

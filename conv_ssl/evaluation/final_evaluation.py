@@ -1,11 +1,12 @@
 from os.path import join, dirname
-from os import makedirs
+from os import makedirs, cpu_count
 from tqdm import tqdm
 
 import torch
 import scipy.stats as stats
 import time
 
+from conv_ssl.evaluation.evaluation import test
 from conv_ssl.evaluation.utils import load_dm, load_model
 from conv_ssl.utils import everything_deterministic, to_device
 from conv_ssl.evaluation.k_fold_aggregate import (
@@ -46,12 +47,13 @@ def test_single_model(
     shift_pred_pr_curve=False,
     long_short_pr_curve=False,
     batch_size=16,
+    num_workers=4,
     split="test",
 ):
     """test model"""
 
     # Load data (same across folds)
-    dm = load_dm(vad_hz=100, horizon=2, batch_size=batch_size, num_workers=4)
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=batch_size, num_workers=num_workers)
 
     # Load model and process test-set
     model = load_model(run_path=run_path, eval=True, strict=False)
@@ -160,9 +162,18 @@ def get_curves(preds, target, pos_label=1, thresholds=None, EPS=1e-6):
 
 
 def find_threshold(
-    run_path, model_name, kfold, split, min_thresh, predictions_path, curve_path
+    run_path,
+    model_name,
+    kfold,
+    split,
+    min_thresh,
+    predictions_path,
+    curve_path,
+    bc_pred_pr_curve=True,
+    shift_pred_pr_curve=True,
+    long_short_pr_curve=True,
 ):
-    def get_best_thresh(metric, measure, min_thresh):
+    def get_best_thresh(curves, metric, measure, min_thresh):
         ts = curves[metric]["thresholds"]
         over = min_thresh <= ts
         under = ts <= (1 - min_thresh)
@@ -179,32 +190,38 @@ def find_threshold(
         threshold_pred_shift=0.5,
         threshold_short_long=0.5,
         threshold_bc_pred=0.1,
-        bc_pred_pr_curve=True,
-        shift_pred_pr_curve=True,
-        long_short_pr_curve=True,
+        bc_pred_pr_curve=bc_pred_pr_curve,
+        shift_pred_pr_curve=shift_pred_pr_curve,
+        long_short_pr_curve=long_short_pr_curve,
         batch_size=16,
+        num_workers=cpu_count(),
         split=split,
     )
 
     ############################################
     # Save predictions
     predictions = {
-        "long_short": {
-            "preds": torch.cat(model.test_metric.long_short_pr.preds),
-            "target": torch.cat(model.test_metric.long_short_pr.target),
-        },
-        "bc_preds": {
-            "preds": torch.cat(model.test_metric.bc_pred_pr.preds),
-            "target": torch.cat(model.test_metric.bc_pred_pr.target),
-        },
-        "shift_preds": {
-            "preds": torch.cat(model.test_metric.shift_pred_pr.preds),
-            "target": torch.cat(model.test_metric.shift_pred_pr.target),
-        },
         "kfold": kfold,
         "model": model.run_name,
         "name": model_name,
     }
+
+    if hasattr(model.test_metric, "long_short_pr"):
+        predictions["long_short"] = {
+            "preds": torch.cat(model.test_metric.long_short_pr.preds),
+            "target": torch.cat(model.test_metric.long_short_pr.target),
+        }
+    if hasattr(model.test_metric, "bc_pred_pr"):
+        predictions["bc_preds"] = {
+            "preds": torch.cat(model.test_metric.bc_pred_pr.preds),
+            "target": torch.cat(model.test_metric.bc_pred_pr.target),
+        }
+    if hasattr(model.test_metric, "shift_pred_pr"):
+        predictions["shift_preds"] = {
+            "preds": torch.cat(model.test_metric.shift_pred_pr.preds),
+            "target": torch.cat(model.test_metric.shift_pred_pr.target),
+        }
+
     makedirs(dirname(predictions_path), exist_ok=True)
     torch.save(predictions, predictions_path)
 
@@ -218,24 +235,37 @@ def find_threshold(
     ]
     metrics = ["bc_preds", "long_short", "shift_preds"]
     for title, metric in zip(titles, metrics):
-        preds, target = predictions[metric]["preds"], predictions[metric]["target"]
-        c = get_curves(preds, target)
-        curves[metric] = c
+        try:
+            preds, target = predictions[metric]["preds"], predictions[metric]["target"]
+            c = get_curves(preds, target)
+            curves[metric] = c
+        except:
+            pass
+
     makedirs(dirname(curve_path), exist_ok=True)
     torch.save(curves, curve_path)
 
     ############################################
     # find best thresh
 
-    bc_pred_threshold = get_best_thresh("bc_preds", "f1", min_thresh)
-    shift_pred_threshold = get_best_thresh("shift_preds", "f1", min_thresh)
-    long_short_threshold = get_best_thresh("long_short", "f1", min_thresh)
+    bc_pred_threshold = None
+    shift_pred_threshold = None
+    long_short_threshold = None
 
-    return {
+    if "bc_preds" in curves:
+        bc_pred_threshold = get_best_thresh(curves, "bc_preds", "f1", min_thresh)
+    if "shift_preds" in curves:
+        shift_pred_threshold = get_best_thresh(curves, "shift_preds", "f1", min_thresh)
+    if "long_short" in curves:
+        long_short_threshold = get_best_thresh(curves, "long_short", "f1", min_thresh)
+
+    ret = {
         "shift": shift_pred_threshold,
         "bc": bc_pred_threshold,
         "long_short": long_short_threshold,
     }
+
+    return ret
 
 
 def get_threshold_and_eval(
@@ -305,6 +335,7 @@ def get_threshold_and_eval(
         shift_pred_pr_curve=False,
         long_short_pr_curve=False,
         batch_size=16,
+        num_workers=cpu_count(),
         split="test",
     )
     res = res[0]
@@ -322,6 +353,9 @@ def get_threshold_and_eval(
         "predictions_path": predictions_path,
         "curve_path": curve_path,
     }
+
+
+# def comparative_threshold():
 
 
 def Extract_Final_Scores():
@@ -347,23 +381,64 @@ def Extract_Final_Scores():
 
     ##########################################################
     # Comparative
+    comp_root = "assets/score/comp"
+    comp_scores = {}
     for kfold, id in comparative.items():
         run_path = join("how_so/VPModel", id)
-        _, model = test_single_model(
+        thresh = find_threshold(
+            run_path=run_path,
+            model_name="comparative",
+            kfold=kfold,
+            split="val",
+            min_thresh=0.01,
+            predictions_path=f"{comp_root}/pred_{kfold}.pt",
+            curve_path=f"{comp_root}/curve_{kfold}.pt",
+            bc_pred_pr_curve=False,
+            shift_pred_pr_curve=True,
+            long_short_pr_curve=True,
+        )
+        res, model = test_single_model(
             run_path,
             event_kwargs=event_kwargs,
-            threshold_pred_shift=0.5,
-            threshold_short_long=0.5,
-            threshold_bc_pred=0.1,
+            threshold_pred_shift=thresh["shift"],
+            threshold_short_long=thresh["long_short"],
+            threshold_bc_pred=0,
             bc_pred_pr_curve=False,
-            shift_pred_pr_curve=False,
-            long_short_pr_curve=False,
+            shift_pred_pr_curve=True,
+            long_short_pr_curve=True,
             batch_size=16,
+            num_workers=cpu_count(),
             split="test",
         )
-        break
+        res = res[0]
+        torch.save(res, f"{comp_root}/score_{kfold}.pt")
+        for k, v in res.items():
+            print(f"{k}: {v}")
+            if k not in comp_scores:
+                comp_scores[k] = [v]
+            else:
+                comp_scores[k].append(v)
+        print(f"Finished kfold: {kfold}")
+        print("#" * 60)
+    torch.save(comp_scores, f"{comp_root}/all_score.pt")
+    # all_score = {'comparative':torch.load("assets/score/comp/all_score.pt")}
 
     all_score = torch.load("assets/score/all_score_new.pt")
+    all_score["comparative"] = {
+        "loss": comp_scores["test_loss"],
+        "f1_hold_shift": comp_scores["test/f1_hold_shift"],
+        "f1_predict_shift": comp_scores["test/f1_predict_shift"],
+        "f1_short_long": comp_scores["test/f1_short_long"],
+        "f1_bc_prediction": comp_scores["test/f1_bc_prediction"],
+        "threshold_pred_shift": [],
+        "threshold_short_long": [],
+        "threshold_bc_pred": [],
+        "model_name": "comparative",
+        "predictions_path": [],
+        "curve_path": [],
+    }
+
+    torch.save(all_score, "assets/score/all_score_new_with_comp.pt")
 
     scores = {
         "loss": [],
@@ -443,7 +518,6 @@ def get_majority_class_probs(events):
 
 
 def majority_class_eval():
-
     everything_deterministic()
 
     # Load data (same across folds)
