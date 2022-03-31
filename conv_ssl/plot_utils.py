@@ -61,6 +61,7 @@ def plot_melspectrogram(
 def plot_vad_oh(
     vad_oh,
     ax=None,
+    ymax=1,
     colors=["b", "orange"],
     yticks=["B", "A"],
     ylabel=None,
@@ -80,7 +81,7 @@ def plot_vad_oh(
     ax.fill_between(
         x,
         y1=0,
-        y2=vad_oh[:, 0],
+        y2=vad_oh[:, 0] * ymax,
         step="mid",
         alpha=alpha,
         color=colors[0],
@@ -89,7 +90,7 @@ def plot_vad_oh(
     ax.fill_between(
         x,
         y1=0,
-        y2=-vad_oh[:, 1],
+        y2=-vad_oh[:, 1] * ymax,
         step="mid",
         alpha=alpha,
         label=label[0],
@@ -701,6 +702,181 @@ def plot_window(
         plt.pause(0.001)
 
     return fig, ax
+
+
+def plot_batch(
+    probs, events, vad, metric, n_rows=4, n_cols=4, plw=2, alpha_vad=0.6, plot=True
+):
+    valid = ["hold", "shift", "predict_shift", "predict_bc", "short", "long"]
+    vad = vad.cpu()
+
+    assert metric in valid, f"{metric} is not valid: {valid}"
+
+    fig, ax = plt.subplots(n_rows, n_cols, sharey=True, sharex=True, figsize=(16, 8))
+    b = 0
+    for row in range(n_rows):
+        for col in range(n_cols):
+            _ = plot_vad_oh(vad[b], ax=ax[row, col], alpha=alpha_vad)
+            if metric in ["hold", "shift"]:
+                _ = plot_vad_oh(
+                    events["shift"][b].cpu(),
+                    ax=ax[row, col],
+                    colors=["g", "g"],
+                    alpha=0.5,
+                )
+                _ = plot_vad_oh(
+                    events["hold"][b].cpu(),
+                    ax=ax[row, col],
+                    colors=["r", "r"],
+                    alpha=0.5,
+                )
+                ax[row, col].plot(probs["p"][b, :, 0], linewidth=plw, color="darkblue")
+                ax[row, col].plot(
+                    probs["p"][b, :, 1], linewidth=plw, color="darkorange"
+                )
+            elif metric == "predict_bc":
+                _ = plot_vad_oh(
+                    events["predict_bc_pos"][b].cpu(),
+                    ax=ax[row, col],
+                    colors=["g", "g"],
+                    alpha=0.5,
+                )
+                _ = plot_vad_oh(
+                    events["predict_bc_neg"][b].cpu(),
+                    ax=ax[row, col],
+                    colors=["r", "r"],
+                    alpha=0.5,
+                )
+                ax[row, col].plot(
+                    probs["bc_prediction"][b, :, 0].cpu(),
+                    linewidth=plw,
+                    color="darkblue",
+                )
+                ax[row, col].plot(
+                    probs["bc_prediction"][b, :, 1].cpu(),
+                    linewidth=plw,
+                    color="darkorange",
+                )
+            elif metric == "predict_shift":
+                _ = plot_vad_oh(
+                    events["predict_shift_pos"][b].cpu(),
+                    ax=ax[row, col],
+                    colors=["g", "g"],
+                    alpha=0.5,
+                )
+                _ = plot_vad_oh(
+                    events["predict_shift_neg"][b].cpu(),
+                    ax=ax[row, col],
+                    colors=["r", "r"],
+                    alpha=0.5,
+                )
+
+                pre_probs = probs.get("pre_probs", None)
+                if pre_probs is not None:
+                    ax[row, col].plot(
+                        probs["pre_probs"][b, :, 0].cpu(),
+                        linewidth=plw,
+                        color="darkblue",
+                    )
+                    ax[row, col].plot(
+                        probs["pre_probs"][b, :, 1].cpu(),
+                        linewidth=plw,
+                        color="darkorange",
+                    )
+                else:
+                    ax[row, col].plot(
+                        probs["p"][b, :, 0].cpu(), linewidth=plw, color="darkblue"
+                    )
+                    ax[row, col].plot(
+                        probs["p"][b, :, 1].cpu(), linewidth=plw, color="darkorange"
+                    )
+            elif metric in ["short", "long"]:
+                _ = plot_vad_oh(
+                    events["short"][b].cpu(),
+                    ax=ax[row, col],
+                    colors=["g", "g"],
+                    alpha=0.5,
+                )
+                _ = plot_vad_oh(
+                    events["long"][b].cpu(),
+                    ax=ax[row, col],
+                    colors=["r", "r"],
+                    alpha=0.5,
+                )
+                pre_probs = probs.get("pre_probs", None)
+                if pre_probs is not None:
+                    ax[row, col].plot(
+                        probs["pre_probs"][b, :, 0].cpu(),
+                        linewidth=plw,
+                        color="darkblue",
+                    )
+                    ax[row, col].plot(
+                        probs["pre_probs"][b, :, 1].cpu(),
+                        linewidth=plw,
+                        color="darkorange",
+                    )
+                else:
+                    # ax[row, col].plot(
+                    #     probs["p"][b, :, 0].cpu(), linewidth=plw, color="darkblue"
+                    # )
+                    # ax[row, col].plot(
+                    #     probs["p"][b, :, 1].cpu(), linewidth=plw, color="darkorange"
+                    # )
+                    ax[row, col].plot(
+                        probs["bc_prediction"][b, :, 0].cpu(),
+                        linewidth=plw,
+                        color="darkblue",
+                    )
+                    ax[row, col].plot(
+                        probs["bc_prediction"][b, :, 1].cpu(),
+                        linewidth=plw,
+                        color="darkorange",
+                    )
+
+            b += 1
+            if b == vad.shape[0]:
+                break
+        if b == vad.shape[0]:
+            break
+    plt.tight_layout()
+    if plot:
+        plt.pause(0.1)
+
+    return fig, ax
+
+
+def plot_curve(
+    y,
+    thresholds,
+    label,
+    ax,
+    min_thresh=0,
+    max_thresh=1,
+    color="b",
+    plot_guide_lines=False,
+):
+    ym = y[thresholds >= min_thresh]
+    ts = thresholds[thresholds >= min_thresh]
+    ym = ym[ts <= max_thresh]
+    ts = ts[ts <= max_thresh]
+    y_max, y_idx = ym.max(0)
+    th_max = round(ts[y_idx].item(), 2)
+    y_max = round(y_max.item(), 3)
+
+    ax.plot(thresholds, y.cpu(), label=label + f"({th_max}, {y_max})", color=color)
+    ax.scatter(th_max, y_max, color=color)
+    ax.vlines(th_max, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color=color)
+    ax.hlines(y_max, xmin=0, xmax=th_max, linestyle="dashed", alpha=0.6, color=color)
+
+    if plot_guide_lines:
+        ax.hlines(
+            y=0.5, xmin=0, xmax=1, linestyle="dashed", color=color, label="BAcc 0.5"
+        )
+        # if min_thresh > 0:
+        #     ax.vlines(min_thresh, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color='k', linewidth=-.5)
+        # if max_thresh < 1:
+        #     ax.vlines(max_thresh, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color='k', linewidth=-.5)
+    return ax
 
 
 def plot_pr_curve(

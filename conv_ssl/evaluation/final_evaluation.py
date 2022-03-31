@@ -492,6 +492,8 @@ def majority_class_eval():
     #   'recall': tensor(1., device='cuda:0'),
     #   'support': tensor(342935, device='cuda:0')}}
 
+    # sanity check
+    # Hardcoded stasts dependent on support (number of shift/holds)
     from torchmetrics import F1Score
 
     f1s = 0
@@ -499,7 +501,7 @@ def majority_class_eval():
     ns = 40957
     nh = 342935
     f1w = nh * f1h / (ns + nh)
-
+    print("f1 (hardcode): ", round(f1w, 3))
     # label = torch.cat((torch.ones((ns,)), torch.zeros((nh,)))).long()
     # pred = torch.zeros_like(label, dtype=torch.float)
     label = torch.cat((torch.zeros((ns,)), torch.ones((nh,)))).long()
@@ -509,7 +511,7 @@ def majority_class_eval():
     # sh_f1 = F1Score(threshold=0.5)
     sh_f1.update(preds=pred, target=label)
     sh = sh_f1.compute()
-    print(sh)
+    print("f1 metrics: ", round(sh.item(), 3))
 
 
 def ANOVA():

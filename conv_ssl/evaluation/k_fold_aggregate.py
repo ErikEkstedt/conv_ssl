@@ -235,6 +235,10 @@ def data_ready():
             for k, v in torch.load("all_result_ind_base_new.pt").items()
         },
     }
+    # F1 best above
+    # discrete: 5
+    # independent: 4
+    # independent baseline: 10
     data = {
         "discrete": {
             k.replace("test/", ""): v
@@ -254,6 +258,7 @@ def data_ready():
         fig_data[model] = {}
         for metric in metrics:
             x = torch.tensor(data[model][metric])
+            print(model, metric, x.max(dim=0))
             fig_data[model][metric] = {"mean": x.mean(), "std": x.std(unbiased=True)}
 
     for model, values in fig_data.items():

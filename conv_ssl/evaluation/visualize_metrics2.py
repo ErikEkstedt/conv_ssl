@@ -6,15 +6,16 @@ import time
 
 import torch
 import pytorch_lightning as pl
+from torchmetrics import PrecisionRecallCurve
 
-from conv_ssl.plot_utils import plot_vad_oh  # , plot_pr_curve
+from conv_ssl.plot_utils import plot_curve, plot_batch
 from conv_ssl.utils import everything_deterministic, to_device
 from conv_ssl.evaluation.evaluation import test
 from conv_ssl.evaluation.k_fold_aggregate import (
     discrete,
     independent,
     independent_baseline,
-    comparative,
+    test_single_model,
 )
 from conv_ssl.evaluation.utils import load_dm, load_model
 
@@ -36,40 +37,6 @@ event_kwargs = dict(
     bc_pre_silence=1.0,
     bc_post_silence=2.0,
 )
-
-
-def plot_curve(
-    y,
-    thresholds,
-    label,
-    ax,
-    min_thresh=0,
-    max_thresh=1,
-    color="b",
-    plot_guide_lines=False,
-):
-    ym = y[thresholds >= min_thresh]
-    ts = thresholds[thresholds >= min_thresh]
-    ym = ym[ts <= max_thresh]
-    ts = ts[ts <= max_thresh]
-    y_max, y_idx = ym.max(0)
-    th_max = round(ts[y_idx].item(), 2)
-    y_max = round(y_max.item(), 3)
-
-    ax.plot(thresholds, y.cpu(), label=label + f"({th_max}, {y_max})", color=color)
-    ax.scatter(th_max, y_max, color=color)
-    ax.vlines(th_max, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color=color)
-    ax.hlines(y_max, xmin=0, xmax=th_max, linestyle="dashed", alpha=0.6, color=color)
-
-    if plot_guide_lines:
-        ax.hlines(
-            y=0.5, xmin=0, xmax=1, linestyle="dashed", color=color, label="BAcc 0.5"
-        )
-        # if min_thresh > 0:
-        #     ax.vlines(min_thresh, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color='k', linewidth=-.5)
-        # if max_thresh < 1:
-        #     ax.vlines(max_thresh, ymin=0, ymax=y_max, linestyle="dashed", alpha=0.6, color='k', linewidth=-.5)
-    return ax
 
 
 def plot_all_curves(c, min_thresh, title, figsize=(9, 6), plot=False):
@@ -122,150 +89,50 @@ def plot_all_curves(c, min_thresh, title, figsize=(9, 6), plot=False):
     return fig, ax
 
 
-def plot_batch(
-    probs, events, vad, metric, n_rows=4, n_cols=4, plw=2, alpha_vad=0.6, plot=True
+def test_single_model(
+    run_path,
+    event_kwargs,
+    threshold_pred_shift=0.5,
+    threshold_short_long=0.5,
+    threshold_bc_pred=0.1,
+    bc_pred_pr_curve=False,
+    shift_pred_pr_curve=False,
+    long_short_pr_curve=False,
+    batch_size=16,
 ):
-    valid = ["hold", "shift", "predict_shift", "predict_bc", "short", "long"]
-    vad = vad.cpu()
+    """test model"""
 
-    assert metric in valid, f"{metric} is not valid: {valid}"
+    # Load data (same across folds)
+    dm = load_dm(vad_hz=100, horizon=2, batch_size=batch_size, num_workers=4)
 
-    fig, ax = plt.subplots(n_rows, n_cols, sharey=True, sharex=True, figsize=(16, 8))
-    b = 0
-    for row in range(n_rows):
-        for col in range(n_cols):
-            _ = plot_vad_oh(vad[b], ax=ax[row, col], alpha=alpha_vad)
-            if metric in ["hold", "shift"]:
-                _ = plot_vad_oh(
-                    events["shift"][b].cpu(),
-                    ax=ax[row, col],
-                    colors=["g", "g"],
-                    alpha=0.5,
-                )
-                _ = plot_vad_oh(
-                    events["hold"][b].cpu(),
-                    ax=ax[row, col],
-                    colors=["r", "r"],
-                    alpha=0.5,
-                )
-                ax[row, col].plot(probs["p"][b, :, 0], linewidth=plw, color="darkblue")
-                ax[row, col].plot(
-                    probs["p"][b, :, 1], linewidth=plw, color="darkorange"
-                )
-            elif metric == "predict_bc":
-                _ = plot_vad_oh(
-                    events["predict_bc_pos"][b].cpu(),
-                    ax=ax[row, col],
-                    colors=["g", "g"],
-                    alpha=0.5,
-                )
-                _ = plot_vad_oh(
-                    events["predict_bc_neg"][b].cpu(),
-                    ax=ax[row, col],
-                    colors=["r", "r"],
-                    alpha=0.5,
-                )
-                ax[row, col].plot(
-                    probs["bc_prediction"][b, :, 0].cpu(),
-                    linewidth=plw,
-                    color="darkblue",
-                )
-                ax[row, col].plot(
-                    probs["bc_prediction"][b, :, 1].cpu(),
-                    linewidth=plw,
-                    color="darkorange",
-                )
-            elif metric == "predict_shift":
-                _ = plot_vad_oh(
-                    events["predict_shift_pos"][b].cpu(),
-                    ax=ax[row, col],
-                    colors=["g", "g"],
-                    alpha=0.5,
-                )
-                _ = plot_vad_oh(
-                    events["predict_shift_neg"][b].cpu(),
-                    ax=ax[row, col],
-                    colors=["r", "r"],
-                    alpha=0.5,
-                )
+    # Load model and process test-set
+    model = load_model(run_path=run_path, eval=True, strict=False)
 
-                pre_probs = probs.get("pre_probs", None)
-                if pre_probs is not None:
-                    ax[row, col].plot(
-                        probs["pre_probs"][b, :, 0].cpu(),
-                        linewidth=plw,
-                        color="darkblue",
-                    )
-                    ax[row, col].plot(
-                        probs["pre_probs"][b, :, 1].cpu(),
-                        linewidth=plw,
-                        color="darkorange",
-                    )
-                else:
-                    ax[row, col].plot(
-                        probs["p"][b, :, 0].cpu(), linewidth=plw, color="darkblue"
-                    )
-                    ax[row, col].plot(
-                        probs["p"][b, :, 1].cpu(), linewidth=plw, color="darkorange"
-                    )
-            elif metric in ["short", "long"]:
-                _ = plot_vad_oh(
-                    events["short"][b].cpu(),
-                    ax=ax[row, col],
-                    colors=["g", "g"],
-                    alpha=0.5,
-                )
-                _ = plot_vad_oh(
-                    events["long"][b].cpu(),
-                    ax=ax[row, col],
-                    colors=["r", "r"],
-                    alpha=0.5,
-                )
-                pre_probs = probs.get("pre_probs", None)
-                if pre_probs is not None:
-                    ax[row, col].plot(
-                        probs["pre_probs"][b, :, 0].cpu(),
-                        linewidth=plw,
-                        color="darkblue",
-                    )
-                    ax[row, col].plot(
-                        probs["pre_probs"][b, :, 1].cpu(),
-                        linewidth=plw,
-                        color="darkorange",
-                    )
-                else:
-                    # ax[row, col].plot(
-                    #     probs["p"][b, :, 0].cpu(), linewidth=plw, color="darkblue"
-                    # )
-                    # ax[row, col].plot(
-                    #     probs["p"][b, :, 1].cpu(), linewidth=plw, color="darkorange"
-                    # )
-                    ax[row, col].plot(
-                        probs["bc_prediction"][b, :, 0].cpu(),
-                        linewidth=plw,
-                        color="darkblue",
-                    )
-                    ax[row, col].plot(
-                        probs["bc_prediction"][b, :, 1].cpu(),
-                        linewidth=plw,
-                        color="darkorange",
-                    )
+    if torch.cuda.is_available():
+        model = model.to("cuda")
 
-            b += 1
-            if b == vad.shape[0]:
-                break
-        if b == vad.shape[0]:
-            break
-    plt.tight_layout()
-    if plot:
-        plt.pause(0.1)
+    # Updatemetric_kwargs metrics
+    # for metric, val in metric_kwargs.items():
+    #     model.conf["vad_projection"][metric] = val
 
-    return fig, ax
+    model.test_metric = model.init_metric(
+        model.conf,
+        model.frame_hz,
+        threshold_pred_shift=threshold_pred_shift,
+        threshold_short_long=threshold_short_long,
+        threshold_bc_pred=threshold_bc_pred,
+        bc_pred_pr_curve=bc_pred_pr_curve,
+        shift_pred_pr_curve=shift_pred_pr_curve,
+        long_short_pr_curve=long_short_pr_curve,
+        **event_kwargs,
+    )
+    model.test_metric = model.test_metric.to(model.device)
+
+    result = test(model, dm, online=False)
+    return result, model
 
 
 def batch_view():
-    """view a single batch at a time"""
-
     # Model
     run_path = discrete["0"]
     # run_path = independent["4"]
@@ -453,50 +320,6 @@ def extract_loss_curve():
     plt.pause(0.1)
 
 
-############################################################
-def test_single_model(
-    run_path,
-    event_kwargs,
-    threshold_pred_shift=0.5,
-    threshold_short_long=0.5,
-    threshold_bc_pred=0.1,
-    bc_pred_pr_curve=False,
-    shift_pred_pr_curve=False,
-    long_short_pr_curve=False,
-    batch_size=16,
-    split="test",
-):
-    """test model"""
-
-    # Load data (same across folds)
-    dm = load_dm(vad_hz=100, horizon=2, batch_size=batch_size, num_workers=4)
-
-    # Load model and process test-set
-    model = load_model(run_path=run_path, eval=True, strict=False)
-
-    if torch.cuda.is_available():
-        model = model.to("cuda")
-
-    # Updatemetric_kwargs metrics
-    # for metric, val in metric_kwargs.items():
-    #     model.conf["vad_projection"][metric] = val
-
-    model.test_metric = model.init_metric(
-        model.conf,
-        model.frame_hz,
-        threshold_pred_shift=threshold_pred_shift,
-        threshold_short_long=threshold_short_long,
-        threshold_bc_pred=threshold_bc_pred,
-        bc_pred_pr_curve=bc_pred_pr_curve,
-        shift_pred_pr_curve=shift_pred_pr_curve,
-        long_short_pr_curve=long_short_pr_curve,
-        **event_kwargs,
-    )
-    model.test_metric = model.test_metric.to(model.device)
-
-    result = test(model, dm, online=False, split=split)
-    return result, model
-
 
 def eval_single_model(
     model_name,
@@ -505,7 +328,6 @@ def eval_single_model(
     project_id="how_so/VPModel",
     verbose=False,
     plot=False,
-    threshold_split="val",
 ):
     """
     # model_name = "independent"
@@ -520,8 +342,6 @@ def eval_single_model(
         id = independent[str(kfold)]
     elif model_name == "independent_baseline":
         id = independent_baseline[str(kfold)]
-    elif model_name == "comparative":
-        id = comparative[str(kfold)]
     else:
         raise NotImplementedError("")
 
@@ -529,7 +349,6 @@ def eval_single_model(
     makedirs(root, exist_ok=True)
     predictions_path = f"{root}/{model_name}/kfold{kfold}_{model_name}_predictions.pt"
     curve_path = f"{root}/{model_name}/kfold{kfold}_{model_name}_curves.pt"
-    result_path = f"{root}/{model_name}/kfold{kfold}_{model_name}_result.pt"
     run_path = join(project_id, id)
 
     if verbose:
@@ -550,7 +369,6 @@ def eval_single_model(
         shift_pred_pr_curve=True,
         long_short_pr_curve=True,
         batch_size=16,
-        split=threshold_split,
     )
 
     ############################################
@@ -606,9 +424,9 @@ def eval_single_model(
         best, best_idx = values.max(0)
         return ts[best_idx]
 
-    bc_pred_threshold = get_best_thresh("bc_preds", "f1")
-    shift_pred_threshold = get_best_thresh("shift_preds", "f1")
     long_short_threshold = get_best_thresh("long_short", "f1")
+    shift_pred_threshold = get_best_thresh("shift_preds", "f1")
+    bc_pred_threshold = get_best_thresh("bc_preds", "f1")
 
     #############################################
     # get scores
@@ -623,10 +441,8 @@ def eval_single_model(
         shift_pred_pr_curve=False,
         long_short_pr_curve=False,
         batch_size=16,
-        split="test",
     )
     res = res[0]
-    torch.save(res, result_path)
 
     return {
         "loss": res["test_loss"],
@@ -643,45 +459,8 @@ def eval_single_model(
     }
 
 
-def Extract_Final_Scores():
-    # import plotly.graph_objects as go
-
-    t = time.time()
-    all_score = {}
-    # for model in ["comparative"]:
-    for model in ["independent", "independent_baseline", "discrete"]:
-        scores = {}
-        for kfold in range(11):
-            score = eval_single_model(
-                model_name=model, kfold=kfold, verbose=True, threshold_split="val"
-            )
-            for k, v in score.items():
-                if k not in scores:
-                    scores[k] = [v]
-                else:
-                    scores[k].append(v)
-        all_score[model] = scores
-    t = time.time() - t
-    torch.save(all_score, "assets/score/all_score_new_comp.pt")
-    print(f"Time: {round(t, 2)}s")
-
-    ##########################################################
-    # Comparative
-    for kfold, id in comparative.items():
-        run_path = join("how_so/VPModel", id)
-        _, model = test_single_model(
-            run_path,
-            event_kwargs=event_kwargs,
-            threshold_pred_shift=0.5,
-            threshold_short_long=0.5,
-            threshold_bc_pred=0.1,
-            bc_pred_pr_curve=False,
-            shift_pred_pr_curve=False,
-            long_short_pr_curve=False,
-            batch_size=16,
-            split="test",
-        )
-        break
+def debug_curves():
+    # LOAD SCORE
 
     all_score = torch.load("assets/score/all_score_new.pt")
 
@@ -699,7 +478,6 @@ def Extract_Final_Scores():
         for model, model_scores in all_score.items():
             t = torch.tensor(model_scores[metric])
             scores[metric].append(t.mean())
-
     f1_metrics = [
         "f1_hold_shift",
         "f1_predict_shift",
@@ -723,6 +501,74 @@ def Extract_Final_Scores():
             if thresh is not None:
                 models[model]["thresh"]["mean"].append(thresh.mean())
                 models[model]["thresh"]["std"].append(thresh.std())
+
+    import plotly.graph_objects as go
+
+    metrics = ["f1_hold_shift", "f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
+    fig = go.Figure(
+        data=[
+            go.Bar(name="Discrete", x=metrics, y=models["discrete"]["mean"]),
+            go.Bar(name="Independent", x=metrics, y=models["independent"]["mean"]),
+            go.Bar(
+                name="Independent-baseline",
+                x=metrics,
+                y=models["independent_baseline"]["mean"],
+            ),
+        ]
+    )
+    fig.update_layout(barmode="group")
+    fig.show()
+    metrics = ["f1_predict_shift", "f1_bc_prediction", "f1_short_long"]
+    fig = go.Figure(
+        data=[
+            go.Bar(name="Discrete", x=metrics, y=models["discrete"]["thresh"]["mean"]),
+            go.Bar(
+                name="Independent", x=metrics, y=models["independent"]["thresh"]["mean"]
+            ),
+            go.Bar(
+                name="Independent-baseline",
+                x=metrics,
+                y=models["independent_baseline"]["thresh"]["mean"],
+            ),
+        ]
+    )
+    fig.update_layout(barmode="group")
+    fig.show()
+
+    # SINGLE
+    # preds = torch.load("assets/score/discrete/kfold5_discrete_predictions.pt")
+    # curves = torch.load("assets/score/discrete/kfold5_discrete_curves.pt")
+    # model_name = 'Discrete'
+    preds = torch.load("assets/score/independent/kfold4_independent_predictions.pt")
+    curves = torch.load("assets/score/independent/kfold4_independent_curves.pt")
+    model_name = "Independent"
+    # fig, ax = plot_all_curves(curves['bc_preds'], min_thresh=0.01, title=f'BC pred: {model_name}', figsize=(9, 6), plot=True)
+    # fig, ax = plot_all_curves(curves['shift_preds'], min_thresh=0.01, title=f'Shift pred: {model_name}', figsize=(9, 6), plot=True)
+    fig, ax = plot_all_curves(
+        curves["long_short"],
+        min_thresh=0.01,
+        title=f"Long/Short: {model_name}",
+        figsize=(9, 6),
+        plot=True,
+    )
+
+
+def extract_threshold_and_result():
+    t = time.time()
+    all_score = {}
+    for model in ["discrete", "independent", "independent_baseline"]:
+        scores = {}
+        for kfold in range(11):
+            score = eval_single_model(model_name="discrete", kfold=kfold, verbose=True)
+            for k, v in score.items():
+                if k not in scores:
+                    scores[k] = [v]
+                else:
+                    scores[k].append(v)
+        all_score[model] = scores
+    t = time.time() - t
+    torch.save(all_score, "assets/score/all_score.pt")
+    print(f"Time: {round(t, 2)}s")
 
 
 def ANOVA():
@@ -828,9 +674,77 @@ def ANOVA():
     plt.show()
 
 
+def majority_class_eval():
+    from vad_turn_taking.metrics import TurnTakingMetrics
+
+    # Load data (same across folds)
+    frame_hz = 100
+    dm = load_dm(vad_hz=frame_hz, horizon=2, batch_size=16, num_workers=4)
+
+    def get_majority_class_probs(events):
+        # We want to guess all holds
+        p = torch.zeros_like(events["shift"])
+        wh = torch.where(events["hold"])
+        p[wh] = torch.ones(len(wh[0]), device=p.device, dtype=torch.float)
+        wh = torch.where(events["shift"])
+        p[wh] = torch.zeros(len(wh[0]), device=p.device, dtype=torch.float)
+
+        # predict shift -> always predict hold
+        w = torch.where(events["predict_shift_pos"])
+        p[w] = torch.zeros(len(w[0]), device=p.device, dtype=torch.float)
+        w = torch.where(events["predict_shift_neg"])
+        p[w] = torch.zeros(len(w[0]), device=p.device, dtype=torch.float)
+
+        # BC / Short vs long
+        bc_probs = torch.zeros_like(events["short"])
+
+        # always predict short
+        w = torch.where(events["short"])
+        bc_probs[w] = torch.ones(len(w[0]), device=bc_probs.device, dtype=torch.float)
+        w = torch.where(events["long"])
+        bc_probs[w] = torch.zeros(len(w[0]), device=bc_probs.device, dtype=torch.float)
+
+        # Predict bc: Never predict bc
+        w = torch.where(events["predict_bc_pos"])
+        # bc_probs[w] = 0.
+        bc_probs[w] = torch.zeros(len(w[0]), device=bc_probs.device, dtype=torch.float)
+        w = torch.where(events["predict_bc_neg"])
+        # bc_probs[w] = 0.
+        bc_probs[w] = torch.zeros(len(w[0]), device=bc_probs.device, dtype=torch.float)
+        return {"p": p, "bc_prediction": bc_probs}
+
+    max_batch = 50
+    metric = TurnTakingMetrics(
+        threshold_pred_shift=0.5,
+        threshold_short_long=0.5,
+        threshold_bc_pred=0.5,
+        bc_pred_pr_curve=False,
+        shift_pred_pr_curve=False,
+        long_short_pr_curve=False,
+        frame_hz=frame_hz,
+        **event_kwargs,
+    )
+    metric = metric.to("cuda")
+    ii = 0
+    for batch in tqdm(dm.test_dataloader()):
+        batch = to_device(batch, device="cuda")
+        events = metric.extract_events(batch["vad"], max_frame=1000)
+        turn_taking_probs = get_majority_class_probs(events)
+        metric.update(
+            p=turn_taking_probs["p"],
+            bc_pred_probs=turn_taking_probs["bc_prediction"],
+            events=events,
+        )
+        ii += 1
+        if ii == max_batch:
+            break
+    r = metric.compute()
+
+
 if __name__ == "__main__":
 
     pl.seed_everything(100)
     everything_deterministic()
 
-    extract_loss_curve()
+    # extract_loss_curve()
+    extract_threshold_and_result()
