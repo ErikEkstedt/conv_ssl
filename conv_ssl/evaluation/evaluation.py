@@ -106,7 +106,9 @@ def tensor_dict_to_json(d):
     for k, v in d.items():
         if isinstance(v, torch.Tensor):
             v = v.tolist()
-        new_d[k] = v.tolist()
+        elif isinstance(v, dict):
+            v = tensor_dict_to_json(v)
+        new_d[k] = v
     return new_d
 
 
@@ -284,11 +286,11 @@ def find_threshold(model, dloader, min_thresh=0.01):
     model.test_metric.to(model.device)
 
     # Find Thresholds
-    result = test(model, dloader, online=False)
+    _ = test(model, dloader, online=False)
 
     ############################################
     # Save predictions
-    predictions = {"model": model.run_name}
+    predictions = {}
     if hasattr(model.test_metric, "long_short_pr"):
         predictions["long_short"] = {
             "preds": torch.cat(model.test_metric.long_short_pr.preds),
@@ -336,6 +338,8 @@ def find_threshold(model, dloader, min_thresh=0.01):
 def evaluate(model_id, savepath, batch_size, num_workers, checkpoint_path=None):
     """Evaluate model"""
 
+    savepath = join(savepath, model_id)
+
     # checkpoint
     if checkpoint_path is None:
         checkpoint_path = get_checkpoint(run_path=model_id)
@@ -374,8 +378,11 @@ def evaluate(model_id, savepath, batch_size, num_workers, checkpoint_path=None):
     print("#" * 60)
     print("Finding Thresholds...")
     print("#" * 60)
+    # thresholds, prediction, curves = find_threshold(
+    #     model, dm.val_dataloader(), min_thresh=MIN_THRESH
+    # )
     thresholds, prediction, curves = find_threshold(
-        model, dm.val_dataloader(), min_thresh=MIN_THRESH
+        model, dm.test_dataloader(), min_thresh=MIN_THRESH
     )
     torch.save(prediction, join(savepath, "predictions.pt"))
     torch.save(curves, join(savepath, "curves.pt"))
@@ -411,7 +418,6 @@ def evaluate(model_id, savepath, batch_size, num_workers, checkpoint_path=None):
 if __name__ == "__main__":
     everything_deterministic()
     model_id = "120k8fdv"
-
     metrics, prediction, curves = evaluate(
         model_id, savepath="metric_test", batch_size=16, num_workers=4
     )
