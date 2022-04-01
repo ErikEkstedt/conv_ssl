@@ -5,17 +5,45 @@ import einops
 from einops.layers.torch import Rearrange
 import pytorch_lightning as pl
 
+
 from conv_ssl.models import Encoder, AR
 from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 
-from vad_turn_taking.metrics import TurnTakingMetrics
-from vad_turn_taking.vad_projection import (
-    VadLabel,
-    ProjectionCodebook,
-    ProjectionIndependent,
-)
-from vad_turn_taking.vad import VAD
-from vad_turn_taking.backchannel import extract_backchannel_prediction_probs_independent
+from vap_turn_taking import VAP, TurnTakingMetrics
+
+
+def load_paper_versions(checkpoint_path):
+    """
+    The code was reformatted and simplified and so some paramter names were changed.
+
+    This functions can load the checkpoints (at the paper version) and replace older names
+    to create a new state_dict appropriate for the new version
+
+    WARNING!
+    The optimizer state is not changed so will probably be bad to continue training with that optimizer
+    """
+    from os.path import basename, dirname, join
+
+    dir = dirname(checkpoint_path)
+    name = basename(checkpoint_path)
+    new_name = name.replace(".ckpt", "_new.ckpt")
+
+    chpt = torch.load(checkpoint_path)
+    sd = chpt["state_dict"]
+    from_to = {
+        "net.projection_head.weight": "net.vap_head.projection_head.weight",
+        "net.projection_head.bias": "net.vap_head.projection_head.bias",
+    }
+    new_sd = {}
+    for param, weight in sd.items():
+        if param in from_to:
+            print(param, "->", from_to[param])
+            param = from_to[param]
+        new_sd[param] = weight
+    chpt["state_dict"] = new_sd
+    new_path = join(dir, new_name)
+    torch.save(chpt, new_path)
+    return new_path
 
 
 class VadCondition(nn.Module):
@@ -48,397 +76,78 @@ class VadCondition(nn.Module):
         return self.ln(v_cond)
 
 
-class CAPEncoder(nn.Module):
-    def __init__(self, input_shape=(2, 40), latent_dim=32, type="conv"):
+class VAPHead(nn.Module):
+    def __init__(self, input_dim, n_bins=4, type="discrete"):
         super().__init__()
-        self.latent_dim = latent_dim
-        self.input_shape = input_shape
 
-        self.output_norm = nn.Identity()
-        if type == "linear":
-            self.net = nn.Sequential(
-                nn.Linear(input_shape, latent_dim * 2),
-                nn.Tanh(),
-                nn.Linear(latent_dim * 2, latent_dim),
-            )
-        elif type == "conv":
-            h = 16
-            self.net = nn.Sequential(
-                nn.Conv1d(
-                    input_shape[0],
-                    out_channels=h,
-                    kernel_size=3,
-                    padding=1,
-                ),
-                nn.ReLU(),
-                nn.Conv1d(
-                    h,
-                    out_channels=h,
-                    kernel_size=3,
-                    padding=1,
-                ),
-                nn.ReLU(),
-                nn.Flatten(1),
-                nn.Linear(h * input_shape[-1], latent_dim),
-            )
+        self.type = type
 
-        self.init_prototypes()
-
-    def extract_negatives(
-        self, y, n_negatives=2, within=True, min_shift=95, max_shift=125
-    ):
-        """
-        Arguments:
-        y:              torch.tensor, (B, t, 2, 40)
-        n_negatives:    int,
-        within:         bool, within or between
-
-        Return:
-        y_neg:      (n_neg, B, t, 2, 40)
-        """
-
-        assert within, f"Only within sampling is defined! but within={within}"
-
-        nb, nt, _, _ = y.shape
-        negs = []
-        t = torch.arange(nt)
-        if within:
-            for b in range(nb):
-                bs = torch.ones(n_negatives * len(t), dtype=torch.long) * b
-                # shift the sequence to avoid same samples, or very similar.
-                shift = torch.randint(min_shift, max_shift, (1,))
-                # tt = t.roll(shift, 0).repeat(n_negatives)
-                tt = t.roll(shift.item(), 0).repeat(n_negatives)
-                negs.append(
-                    einops.rearrange(y[bs, tt], "(a n) c d -> a n c d", a=n_negatives)
+        if type == "comparative":
+            self.projection_head = nn.Linear(input_dim, 1)
+        else:
+            self.total_bins = 2 * n_bins
+            if type == "regression":
+                self.projection_head = nn.Sequential(
+                    nn.Linear(input_dim, self.total_bins),
+                    Rearrange("... (c f) -> ... c f", c=2, f=self.total_bins // 2),
                 )
-            negs = torch.stack(negs, dim=1)
-        return negs
-
-    def _prototype_vector(
-        self,
-        active_channel,
-        silence_prefix=0,
-        silence_suffix=0,
-        other_active_prefix=0,
-        other_active_suffix=0,
-    ):
-        v = torch.zeros(self.input_shape, dtype=torch.float)
-
-        if silence_prefix > 0:
-            v[active_channel, silence_prefix:] = 1.0
-
-        if silence_suffix > 0:
-            v[active_channel, -silence_suffix:] = 0.0
-
-        other_channel = 0 if active_channel == 1 else 1
-
-        if other_active_prefix > 0:
-            v[other_channel, :other_active_prefix] = 1.0
-
-        if other_active_suffix > 0:
-            v[other_channel, -other_active_suffix:] = 1.0
-
-        return v
-
-    def init_prototypes(self):
-        n = self.input_shape[-1]
-        silence_prefix = n // 4
-        bc_other_prefix = silence_prefix // 2
-
-        prototypes = []
-        # next speaker on silence
-        prototypes.append(self._prototype_vector(0, silence_prefix))
-        prototypes.append(self._prototype_vector(1, silence_prefix))
-        # next speaker on active
-        prototypes.append(
-            self._prototype_vector(
-                0, silence_prefix, other_active_prefix=silence_prefix
-            )
-        )
-        prototypes.append(
-            self._prototype_vector(
-                1, silence_prefix, other_active_prefix=silence_prefix
-            )
-        )
-        # BC prediction Silence
-        prototypes.append(
-            self._prototype_vector(
-                0,
-                silence_prefix,
-                silence_suffix=silence_prefix,
-                other_active_suffix=silence_prefix,
-            )
-        )
-        prototypes.append(
-            self._prototype_vector(
-                1,
-                silence_prefix,
-                silence_suffix=silence_prefix,
-                other_active_suffix=silence_prefix,
-            )
-        )
-        # BC prediction Active
-        prototypes.append(
-            self._prototype_vector(
-                0,
-                silence_prefix,
-                silence_suffix=silence_prefix,
-                other_active_prefix=bc_other_prefix,
-                other_active_suffix=silence_prefix,
-            )
-        )
-        prototypes.append(
-            self._prototype_vector(
-                1,
-                silence_prefix,
-                silence_suffix=silence_prefix,
-                other_active_prefix=bc_other_prefix,
-                other_active_suffix=silence_prefix,
-            )
-        )
-
-        self.prototypes = torch.stack(prototypes)
-        self.prototypes_names = {
-            "a_next_sil": 1,
-            "b_next_sil": 2,
-            "a_next_act": 3,
-            "b_next_act": 4,
-            "a_bc_pred": 5,
-            "b_bc_pred": 6,
-            "a_bc_pred_act": 7,
-            "b_bc_pred_act": 8,
-        }
-        self.prototypes_idx = {v: k for k, v in self.prototypes_names.items()}
-
-    def get_probs(self, z_pred, vad=None):
-        """
-        Given the predicted vector at each time step, compare 'prototype' vectors, and match the closest.
-        """
-
-        B, T, D = z_pred.shape
-        zp = self(self.prototypes.to(z_pred.device))
-        zp = zp.unsqueeze(1)  # batch dim
-
-        zpredflat = einops.rearrange(z_pred, "b t d -> (b t) d")
-        score = F.cosine_similarity(zpredflat, zp, dim=-1)
-        score = einops.rearrange(score, "n (b t) -> n b t", b=B)  # (N, B, T)
-
-        # SILENCE probs
-        # ON SILENCE: compare prototype score for A is next speaker with B
-        # compare the normalized distance and treat as a probability
-        # shift and scale scores [-1, 1] -> [0, 2] -> [0, 1]
-        # i.e. A=0.3 and B=-.2 -> 1.3, 0.2 -> 0.65, 0.1 ->
-        a_sil = (score[0] + 1) / 2
-        b_sil = (score[1] + 1) / 2
-        sum = a_sil + b_sil
-        sil_probs = torch.stack((a_sil, b_sil), dim=-1) / sum.unsqueeze(-1)
-
-        # ACTIVE
-        # Compare a-active with B-is-next from above -> renormalize etc
-        a_act = (score[2] + 1) / 2
-        a_act = a_act / (a_act + b_sil)
-        b_act = (score[3] + 1) / 2
-        b_act = b_act / (b_act + a_sil)
-        act_probs = torch.stack((a_act, b_act), dim=-1)
-
-        # BC prediction SILENCE
-        # We only use the the normalized score for the backchannel
-        # prediction -> using a threshold during test to find where the best value is
-        a_bc_pred_sil = (score[4] + 1) / 2
-        b_bc_pred_sil = (score[5] + 1) / 2
-
-        # BC prediction ACTIVE
-        # We only use the the normalized score for the backchannel
-        # prediction -> using a threshold during test to find where the best value is
-        a_bc_pred_act = (score[6] + 1) / 2
-        b_bc_pred_act = (score[7] + 1) / 2
-
-        ################################################################
-        # Final "Probabilities"
-        ################################################################
-        # Extract appropriate values on certain states of the input
-        p_a = torch.zeros_like(sil_probs[..., 0])
-        p_b = torch.zeros_like(sil_probs[..., 0])
-        p_a_bc_pred = torch.zeros_like(sil_probs[..., 0])
-        p_b_bc_pred = torch.zeros_like(sil_probs[..., 0])
-
-        # dialog states
-        ds = VAD.vad_to_dialog_vad_states(vad)
-        silence = ds == 1
-        a_current = ds == 0
-        b_current = ds == 3
-        both = ds == 2
-
-        # silence
-        w = torch.where(silence)
-        p_a[w] = sil_probs[w][..., 0]
-        p_b[w] = sil_probs[w][..., 1]
-        p_a_bc_pred[w] = a_bc_pred_sil[w]
-        p_b_bc_pred[w] = b_bc_pred_sil[w]
-
-        # A current speaker
-        # Given only A is speaking we use the 'active' probability of B being the next speaker
-        w = torch.where(a_current)
-        p_a[w] = 1 - act_probs[w][..., 1]  # P_a = 1-P_b
-        p_b[w] = act_probs[w][..., 1]  # P_b
-        p_a_bc_pred[w] = 1 - b_bc_pred_act[w]
-        p_b_bc_pred[w] = b_bc_pred_act[w]
-
-        # B current speaker
-        w = torch.where(b_current)
-        p_a[w] = act_probs[w][..., 0]  # P_a for A being next speaker, while B is active
-        p_b[w] = 1 - act_probs[w][..., 0]  # P_b = 1-P_a
-        p_a_bc_pred[w] = a_bc_pred_act[w]
-        p_b_bc_pred[w] = 1 - a_bc_pred_act[w]
-
-        # Both
-        # P_a_prior=A is next (active)
-        # P_b_prior=B is next (active)
-        # We the compare/renormalize given the two values of A/B is the next speaker
-        # sum = P_a_prior+P_b_prior
-        # P_a = P_a_prior / sum
-        # P_b = P_b_prior / sum
-        w = torch.where(both)
-        # Re-Normalize and compare next-active
-        sum = act_probs[w][..., 0] + act_probs[w][..., 1]
-        p_a[w] = act_probs[w][..., 0] / sum
-        p_b[w] = act_probs[w][..., 1] / sum
-        p = torch.stack((p_a, p_b), dim=-1)
-        bc_probs = torch.stack((p_a_bc_pred, p_b_bc_pred), dim=-1)
-        return {"p": p, "bc_prediction": bc_probs}
-
-    def nce_loss(self, z_pred, y, n_negatives=5):
-        b, t, c, d = y.shape
-
-        # Positives
-        yp = einops.rearrange(y, "b t ... -> (b t) ...")
-        zp = einops.rearrange(self(yp), "(b t) ... -> b t ...", b=b, t=t)
-        zp = zp.unsqueeze(0)  # add neg/pos dimension
-
-        # Negatives
-        y_neg = self.extract_negatives(y, n_negatives=n_negatives)
-        yn = einops.rearrange(y_neg, "n b t ... -> (n b t) ...")
-        zn = einops.rearrange(
-            self(yn), "(n b t) ... -> n b t ... ", n=n_negatives, b=b, t=t
-        )
-
-        # Join positives/negatives
-        zjoint = torch.cat((zp, zn))
-
-        # calculate similarity
-        score = F.cosine_similarity(z_pred, zjoint, dim=-1)
-        score = einops.rearrange(score, "n b t -> (b t) n")
-        label = torch.zeros_like(score[:, 0], dtype=torch.long)
-        loss = F.cross_entropy(score, label)
-        return loss
+            else:
+                self.n_classes = 2 ** self.total_bins
+                self.projection_head = nn.Linear(input_dim, self.n_classes)
 
     def forward(self, x):
-        z = self.net(x)
-        z = self.output_norm(z)
-        return z
+        return self.projection_head(x)
 
 
 class ProjectionModel(nn.Module):
-    @staticmethod
-    def load_config(path=None, args=None, format="dict"):
-        if path is None:
-            path = repo_root() + "/conv_ssl/config/model.yaml"
-        return load_config(path, args=args, format=format)
-
     def __init__(self, conf) -> None:
         super().__init__()
         self.conf = conf
 
         # Audio Encoder
-        self.encoder = self.build_encoder(conf)
-        input_dim = conf["encoder"]["dim"]
+        self.encoder = Encoder(conf)
 
         # VAD Conditioning
         self.vad_condition = VadCondition(
-            input_dim,
+            self.encoder.output_dim,
             vad_history=conf["vad_cond"]["vad_history"],
             vad_history_bins=conf["vad_cond"]["vad_history_bins"],
         )
 
-        # Unit Language Model
-        self.ulm = self.build_ulm(input_dim, conf)
-        if self.ulm is not None:
-            self.ulm_head = nn.Linear(conf["ulm"]["dim"], conf["quantizer"]["n_codes"])
-            input_dim = conf["ulm"]["dim"]
-
         # Autoregressive
-        self.ar = self.build_ar(input_dim, conf)
-        if self.ar is not None:
-            input_dim = conf["ar"]["dim"]
+        self.ar = AR(
+            input_dim=self.encoder.output_dim,
+            dim=conf["ar"]["dim"],
+            num_layers=conf["ar"]["num_layers"],
+            dropout=conf["ar"]["dropout"],
+            ar=conf["ar"]["type"],
+            transfomer_kwargs=dict(
+                num_heads=conf["ar"]["num_heads"],
+                dff_k=conf["ar"]["dff_k"],
+                use_pos_emb=conf["ar"]["use_pos_emb"],
+                abspos=conf["ar"]["abspos"],
+                sizeSeq=conf["ar"]["sizeSeq"],
+            ),
+        )
 
-        # VAD Projection
-        # self.vad_projection = nn.Linear(input_dim, conf["vad_projection"])
+        # Appropriate VAP-head
+        self.vap_type = "discrete"
         if conf["vad_projection"]["regression"]:
             if conf["vad_projection"]["comparative"]:
-                self.projection_head = nn.Linear(input_dim, 1)
+                self.vap_type = "comparative"
             else:
-                cf = len(conf["vad_projection"]["bin_times"]) * 2
-                self.projection_head = nn.Sequential(
-                    nn.Linear(input_dim, cf),
-                    Rearrange("... (c f) -> ... c f", c=2, f=cf // 2),
-                )
-        elif conf["vad_projection"]["latent"]:
-            self.projection_head = nn.Linear(
-                input_dim, conf["vad_projection"]["latent_dim"]
-            )
-            bins = len(conf["vad_projection"]["bin_times"])
-            self.future_encoder = CAPEncoder(
-                input_shape=(2, bins),
-                latent_dim=conf["vad_projection"]["latent_dim"],
-                type="conv",
-            )
-        else:
-            total_bins = 2 * len(conf["vad_projection"]["bin_times"])
-            self.n_classes = 2 ** total_bins
-            self.projection_head = nn.Linear(input_dim, self.n_classes)
+                self.vap_type = "independent"
 
-    def build_encoder(self, conf):
-        encoder = Encoder(conf)
-        return encoder
+        n_bins = len(conf["vad_projection"]["bin_times"])
+        self.vap_head = VAPHead(
+            input_dim=conf["ar"]["dim"], n_bins=n_bins, type=self.vap_type
+        )
 
-    def build_ulm(self, input_dim, conf):
-        net = None
-        if conf["quantizer"]["n_codes"] > 0 and conf["ulm"]["num_layers"] > 0:
-            net = AR(
-                input_dim=input_dim,
-                dim=conf["ulm"]["dim"],
-                num_layers=conf["ulm"]["num_layers"],
-                dropout=conf["ulm"]["dropout"],
-                ar=conf["ulm"]["type"],
-                transfomer_kwargs=dict(
-                    num_heads=conf["ulm"]["num_heads"],
-                    dff_k=conf["ulm"]["dff_k"],
-                    use_pos_emb=conf["ulm"]["use_pos_emb"],
-                    abspos=conf["ulm"]["abspos"],
-                    sizeSeq=conf["ulm"]["sizeSeq"],
-                ),
-            )
-        return net
-
-    def build_ar(self, input_dim, conf):
-        net = None
-        if conf["ar"]["num_layers"] > 0:
-            net = AR(
-                input_dim=input_dim,
-                dim=conf["ar"]["dim"],
-                num_layers=conf["ar"]["num_layers"],
-                dropout=conf["ar"]["dropout"],
-                ar=conf["ar"]["type"],
-                transfomer_kwargs=dict(
-                    num_heads=conf["ar"]["num_heads"],
-                    dff_k=conf["ar"]["dff_k"],
-                    use_pos_emb=conf["ar"]["use_pos_emb"],
-                    abspos=conf["ar"]["abspos"],
-                    sizeSeq=conf["ar"]["sizeSeq"],
-                ),
-            )
-        return net
+    @staticmethod
+    def load_config(path=None, args=None, format="dict"):
+        if path is None:
+            path = repo_root() + "/conv_ssl/config/model.yaml"
+        return load_config(path, args=args, format=format)
 
     def loss_vad_projection(self, logits, labels, reduction="mean"):
         # CrossEntropyLoss over discrete labels
@@ -452,131 +161,42 @@ class ProjectionModel(nn.Module):
             loss = einops.rearrange(loss, "(b n) -> b n", n=n)
         return loss
 
-    def loss_ulm(self, logits_ar, input_ids, reduction="mean"):
-        """
-        Calculate ULM unit autoregrssive loss (Causal Language Modeling)
-        """
-        # Shift the input to get y/targets/labels
-        y = input_ids[:, 1:]
-        y_hat = logits_ar[:, :-1]
-        loss_ar = F.cross_entropy(
-            einops.rearrange(y_hat, "b n d -> (b n) d"),
-            einops.rearrange(y, "b n -> (b n)"),
-            reduction=reduction,
-        )
+    def encode(self, waveform):
+        enc_out = self.encoder(waveform)
+        z = enc_out.get("q_idx", enc_out["z"])
+        return z
 
-        if reduction == "none":
-            n = y.shape[1]  # steps in loss
-            loss_ar = einops.rearrange(loss_ar, "(b n) -> b n", n=n)
-        return loss_ar
-
-    def encode(self, waveform, input_ids):
-        if input_ids is not None:
-            return input_ids
-        else:
-            enc_out = self.encoder(waveform)
-            z = enc_out.get("q_idx", enc_out["z"])
-            return z
-
-    def forward(self, waveform=None, input_ids=None, vad=None, vad_history=None):
-        assert (
-            waveform is not None or input_ids is not None
-        ), "must provide either `waveform` or `input_ids`"
-
+    def forward(self, waveform, va, va_history=None):
         out = {}
 
         # Encode Audio
-        z = self.encode(waveform, input_ids)
+        z = self.encode(waveform)
 
         # Vad conditioning
-        vc = self.vad_condition(vad, vad_history)
+        vc = self.vad_condition(va, va_history)
 
-        if self.conf["vad_cond"]["pre_ulm"]:
-            # z += vc[:, : z.shape[1]] # don't do inplace! deterministic/cuda fails
-            z = z + vc[:, : z.shape[1]]
+        # Add vad-conditioning to audio features
+        z = z + vc[:, : z.shape[1]]
 
-        # logits_ar & logits_vp
-        if self.ulm is not None:
-            z = self.ulm(z)["z"]
-            out["logits_ar"] = self.ulm_head(z)
+        # Autoregressive
+        z = self.ar(z)["z"]
 
-        if self.conf["vad_cond"]["post_ulm"]:
-            # z += vc[:, : z.shape[1]]
-            z = z + vc[:, : z.shape[1]]
-
-        if self.ar is not None:
-            z = self.ar(z)["z"]
-
-        out["logits_vp"] = self.projection_head(z)
-
+        out["logits_vp"] = self.vap_head(z)
         return out
 
 
-class VadProjectionTask(pl.LightningModule):
-    def next_speaker_probs_independent(self, logits, vad=None):
-        """Probabilities for turn-taking task given the INDEPENDENT model"""
-
-        def _normalize_reg_probs(probs):
-            probs = probs.sum(dim=-1)
-            tot = probs.sum(dim=-1, keepdim=True)
-            # renormalize for comparison
-            probs = probs / tot
-            return probs
-
-        # Compare chosen subset of next-speaker-activity
-        probs = logits.sigmoid()
-        next_probs = _normalize_reg_probs(probs)
-        pre_probs = _normalize_reg_probs(probs[..., :, self.pre_frames :])
-        bc_prediction = extract_backchannel_prediction_probs_independent(probs)
-        return {"p": next_probs, "pre_probs": pre_probs, "bc_prediction": bc_prediction}
-
-    def next_speaker_probs_comparative(self, logits):
-        """
-        Probabilities for turn-taking task given the COMPARATIVE model
-        """
-        probs = logits.sigmoid()
-        next_probs = torch.cat((probs, 1 - probs), dim=-1)
-        return {"p": next_probs, "pre_probs": next_probs}
-
-    def get_next_speaker_probs(self, logits, vad=None):
-        if self.regression:
-            if self.conf["vad_projection"]["comparative"]:
-                out = self.next_speaker_probs_comparative(logits)
-            else:
-                # out = self.next_speaker_probs_independent(logits, vad)
-                out = self.projection_codebook.get_probs(logits, vad=vad)
-        elif self.conf["vad_projection"]["latent"]:
-            out = self.net.future_encoder.get_probs(z_pred=logits, vad=vad)
-        else:
-            out = self.projection_codebook.get_probs(logits, vad)
-        return out
-
-
-# class VPModel(pl.LightningModule):
-class VPModel(VadProjectionTask):
-    @staticmethod
-    def load_config(path=None, args=None, format="dict"):
-        return ProjectionModel.load_config(path, args, format)
-
+class VPModel(pl.LightningModule):
     def __init__(self, conf) -> None:
         super().__init__()
+        self.net = ProjectionModel(conf)  # x, vf, vh -> logits
+        self.vap_type = self.net.vap_type
 
-        # tmp fix
-        if "latent" not in conf["vad_projection"]:
-            conf["vad_projection"]["latent"] = False
-            conf["vad_projection"]["latent_dim"] = -1
-        # self.loss_vector = torch.zeros(1000, dtype=torch.float)
-        # self.loss_vector = []
-        # self.loss_n = torch.tensor([0])
-
-        self.net = ProjectionModel(conf)
-
-        # Extract labels
-        self.vad_label_maker = VadLabel(
+        self.VAP = VAP(
+            type=self.vap_type,
             bin_times=conf["vad_projection"]["bin_times"],
-            vad_hz=self.net.encoder.frame_hz,
+            frame_hz=self.net.encoder.frame_hz,
             threshold_ratio=conf["vad_projection"]["vad_threshold"],
-        )
+        )  # logits -> zero-shot probs etc
 
         # conf
         self.frame_hz = self.net.encoder.frame_hz
@@ -585,38 +205,6 @@ class VPModel(VadProjectionTask):
         # Metrics
         self.val_metric = None  # self.init_metric(conf, frame_hz=self.frame_hz)
         self.test_metric = None  # set in test if necessary
-
-        # NOTE: Unused?
-        self.event_dict = dict(
-            bin_times=conf["vad_projection"]["bin_times"],
-            vad_threshold=conf["vad_projection"]["vad_threshold"],
-            pred_threshold=conf["vad_projection"]["pred_threshold"],
-            event_min_context=conf["vad_projection"]["event_min_context"],
-            event_min_duration=conf["vad_projection"]["event_min_duration"],
-            event_horizon=conf["vad_projection"]["event_horizon"],
-            event_start_pad=conf["vad_projection"]["event_start_pad"],
-            event_target_duration=conf["vad_projection"]["event_target_duration"],
-            event_bc_pre_silence=conf["vad_projection"]["event_bc_pre_silence"],
-            event_bc_post_silence=conf["vad_projection"]["event_bc_post_silence"],
-            event_bc_max_active=conf["vad_projection"]["event_bc_max_active"],
-            frame_hz=self.net.encoder.frame_hz,
-        )
-
-        # only use discrete codes if necessary
-        self.regression = conf["vad_projection"]["regression"]
-        self.pre_frames = conf["vad_projection"]["regression_pre_frames"]
-
-        if self.regression:
-            self.projection_codebook = ProjectionIndependent(
-                pre_frames=conf["vad_projection"]["regression_pre_frames"],
-                bin_times=conf["vad_projection"]["bin_times"],
-                frame_hz=self.net.encoder.frame_hz,
-            )
-        if not (self.regression or self.conf["vad_projection"]["latent"]):
-            self.projection_codebook = ProjectionCodebook(
-                bin_times=conf["vad_projection"]["bin_times"],
-                frame_hz=self.net.encoder.frame_hz,
-            )
 
         # Training params
         self.learning_rate = conf["optimizer"]["learning_rate"]
@@ -637,33 +225,6 @@ class VPModel(VadProjectionTask):
         long_short_pr_curve=False,
         **event_kwargs,
     ):
-        # metric = TurnTakingMetrics(
-        #     # don't extract events before a certain context is known
-        #     min_context=conf["vad_projection"]["event_min_context"],
-        #     # the event-horizon (same as vad)
-        #     horizon=conf["vad_projection"]["event_horizon"],
-        #     # time after activity to start use frames for prediction
-        #     start_pad=conf["vad_projection"]["event_start_pad"],
-        #     # number of frames to use in metrics/event
-        #     target_duration=conf["vad_projection"]["event_target_duration"],
-        #     # the frame-hz of vad-representation
-        #     frame_hz=frame_hz,
-        #     # time at eot to predict shift/holf
-        #     pre_active=conf["vad_projection"]["event_pre"],
-        #     # silence before activity to be considered BC
-        #     bc_pre_silence=conf["vad_projection"]["event_bc_pre_silence"],
-        #     # silence after activity to be considered BC
-        #     bc_post_silence=conf["vad_projection"]["event_bc_post_silence"],
-        #     # longest activity to be considered BC
-        #     bc_max_active=conf["vad_projection"]["event_bc_max_active"],
-        #     # The amount of time prior a backchannel to infer bc-prediciton stats
-        #     bc_prediction_window=conf["vad_projection"]["event_bc_prediction_window"],
-        #     threshold=0.5,  # f1 threshold
-        #     threshold_bc_ongoing=conf["vad_projection"]["event_bc_ongoing_threshold"],
-        #     threshold_bc_pred=conf["vad_projection"]["event_bc_pred_threshold"],
-        #     bc_pred_pr_curve=bc_pred_pr_curve,
-        #     discrete=not conf["vad_projection"]["regression"],  # discrete model or not
-        # )
         metric = TurnTakingMetrics(
             threshold_pred_shift=threshold_pred_shift,
             threshold_short_long=threshold_short_long,
@@ -676,6 +237,10 @@ class VPModel(VadProjectionTask):
         )
         metric = metric.to(self.device)
         return metric
+
+    @staticmethod
+    def load_config(path=None, args=None, format="dict"):
+        return ProjectionModel.load_config(path, args, format)
 
     @property
     def run_name(self):
@@ -693,9 +258,6 @@ class VPModel(VadProjectionTask):
             name += "_latent"
         return name
 
-    def forward(self, *args, **kwargs):
-        return self.net(*args, **kwargs)
-
     def summary(self):
         s = "VPModel\n"
         s += "Encoder\n"
@@ -703,19 +265,13 @@ class VPModel(VadProjectionTask):
         s += f"\toutput_layer: {self.conf['encoder']['output_layer']}\n"
         s += f"\tHz: {self.net.encoder.frame_hz}\n"
         s += f"\tquantizer n_codes: {self.conf['quantizer']['n_codes']}\n"
-        if self.net.ulm is not None:
-            s += "ULM\n"
-            s += f"\tnum_layers: {self.conf['ulm']['num_layers']}\n"
-            s += f"\tnum_heads: {self.conf['ulm']['num_heads']}\n"
-            s += f"\tdim: {self.conf['ulm']['dim']}\n"
-        if self.net.ar is not None:
-            s += "AR\n"
-            s += f"\tnum_layers: {self.conf['ar']['num_layers']}\n"
-            s += f"\tnum_heads: {self.conf['ar']['num_heads']}\n"
-            s += f"\tdim: {self.conf['ar']['dim']}\n"
-        s += "Head\n"
+        s += "AR\n"
+        s += f"\tnum_layers: {self.conf['ar']['num_layers']}\n"
+        s += f"\tnum_heads: {self.conf['ar']['num_heads']}\n"
+        s += f"\tdim: {self.conf['ar']['dim']}\n"
+        s += "VAPHead\n"
         s += f"\tregression: {self.regression}\n"
-        s += f"\thead: {self.net.projection_head}\n"
+        s += f"\thead: {self.net.vap_head}\n"
         s += f"\tbin_times: {self.conf['vad_projection']['bin_times']}\n"
         if self.regression:
             s += f"\nregression_loss: {self.conf['vad_projection']['regression_loss']}"
@@ -729,59 +285,20 @@ class VPModel(VadProjectionTask):
             weight_decay=self.weight_decay,
         )
 
-    def calc_losses(self, out, vad_projection_window, input_ids=None, reduction="mean"):
-        loss = {}
+    def forward(self, *args, **kwargs):
+        return self.net(*args, **kwargs)
 
-        # Vad Projection Loss
-        if self.conf["vad_projection"]["regression"]:
-            if self.conf["vad_projection"]["comparative"]:
-                loss["vp"] = F.binary_cross_entropy_with_logits(
-                    out["logits_vp"], vad_projection_window.unsqueeze(-1)
-                )
-            else:
-                if self.conf["vad_projection"]["regression_loss"] == "mse":
-                    loss["vp"] = F.mse_loss(
-                        out["logits_vp"].sigmoid(), vad_projection_window
-                    )
-                elif self.conf["vad_projection"]["regression_loss"] in ["mae", "l1"]:
-                    loss["vp"] = F.l1_loss(
-                        out["logits_vp"].sigmoid(), vad_projection_window
-                    )
-                else:  # BCE
-                    loss["vp"] = F.binary_cross_entropy_with_logits(
-                        out["logits_vp"], vad_projection_window, reduction=reduction
-                    )
-        elif self.conf["vad_projection"]["latent"]:
-            z_pred = out["logits_vp"]  # Not logits but projected z vectors
-            loss["vp"] = self.net.future_encoder.nce_loss(
-                z_pred, vad_projection_window, n_negatives=5
+    def calc_losses(self, logits, va_labels, reduction="mean"):
+        if self.vap_type == "comparative":
+            loss = F.binary_cross_entropy_with_logits(logits, va_labels.unsqueeze(-1))
+        elif self.vap_type == "independent":
+            loss = F.binary_cross_entropy_with_logits(
+                logits, va_labels, reduction=reduction
             )
         else:
-            # Vad Projection Loss
-            vad_labels = self.projection_codebook(vad_projection_window)
-            loss["vp"] = self.net.loss_vad_projection(
-                logits=out["logits_vp"], labels=vad_labels, reduction=reduction
+            loss = self.net.loss_vad_projection(
+                logits, labels=va_labels, reduction=reduction
             )
-
-        # ULM Loss
-        if self.net.ulm is not None and input_ids is not None:
-            if self.conf["vad_projection"]["latent"]:
-                raise NotImplementedError(
-                    "Can't use 'latent' contrastive training with ULM yet..."
-                )
-            loss["ar"] = self.net.loss_ulm(
-                out["logits_ar"], input_ids, reduction=reduction
-            )
-
-            if reduction == "none":
-                loss["total"] = (
-                    self.alpha * loss["vp"][:, :-1] + (1 - self.alpha) * loss["ar"]
-                )
-            else:
-                loss["total"] = self.alpha * loss["vp"] + (1 - self.alpha) * loss["ar"]
-        else:
-            loss["total"] = loss["vp"]
-
         return loss
 
     def shared_step(self, batch, reduction="mean"):
@@ -794,51 +311,39 @@ class VPModel(VadProjectionTask):
             out:        dict
             batch:      same as input arguments (fixed for differenct encoder Hz)
         """
-        # Extract labels (using horizon which spans beyond the sample)
-        if (
-            "comparative" in self.conf["vad_projection"]
-            and self.conf["vad_projection"]["comparative"]
-        ):  # scalar value
-            vad_projection_window = self.vad_label_maker.comparative_activity(
-                batch["vad"]
-            )
-        else:  # onehot window projection
-            vad_projection_window = self.vad_label_maker.vad_projection(batch["vad"])
+
+        # Get labels
+        va_labels = self.VAP.extract_label(va=batch["vad"])
 
         # Only keep the relevant vad information
-        n_valid = vad_projection_window.shape[1]
+        n_valid = va_labels.shape[1]
         batch["vad"] = batch["vad"][:, :n_valid]
 
         # Forward pass
         out = self(
-            waveform=batch.get("waveform", None),
-            input_ids=batch.get("q", None),
-            vad=batch["vad"],
-            vad_history=batch.get("vad_history", None),
+            waveform=batch["waveform"],
+            va=batch["vad"],
+            va_history=batch.get("vad_history", None),
         )
+
+        out["va_labels"] = va_labels
 
         # Resize batch/use-subset to match encoder output size
         # some encoders (wav2vec, vq_wav2vec) drops 2 frames on 10sec audio
         # some encoders (wavlm_base, hubert) drops 1 frames (after downsampling) on 10sec audio
         n_frames = out["logits_vp"].shape[1]
         batch["vad"] = batch["vad"][:, :n_frames]
-        batch["vad_projection_window"] = vad_projection_window[:, :n_frames]
         if "vad_history" in batch:
             batch["vad_history"] = batch["vad_history"][:, :n_frames]
 
+        # Calculate Loss
         loss = self.calc_losses(
-            out,
-            vad_projection_window=batch["vad_projection_window"],
-            input_ids=batch.get("q", None),
+            logits=out["logits_vp"],
+            va_labels=va_labels,
             reduction=reduction,
-            # reduction="none",
         )
 
-        # self.loss_vector += loss["vp"].sum(0).cpu()
-        # self.loss_vector.append(loss["vp"].cpu())
-        # self.loss_n += batch["vad"].shape[0]
-
-        loss = {"vp": loss["vp"].mean(), "total": loss["total"].mean()}
+        loss = {"vp": loss.mean(), "total": loss.mean()}
         return loss, out, batch
 
     def training_step(self, batch, batch_idx, **kwargs):
@@ -860,7 +365,7 @@ class VPModel(VadProjectionTask):
             self.val_metric.to(self.device)
 
         # extract events for metrics (use full vad including horizon)
-        events = self.val_metric.extract_events(batch["vad"])
+        events = self.val_metric.extract_events(va=batch["vad"], max_frame=1000)
 
         # Regular forward pass
         loss, out, batch = self.shared_step(batch)
@@ -868,18 +373,11 @@ class VPModel(VadProjectionTask):
 
         # log scores
         self.log("val_loss", loss["total"], batch_size=batch_size)
-        self.log("val_loss_vp", loss["vp"], batch_size=batch_size)
-        if "loss_ar" in loss:
-            self.log("val_loss_ar", loss["ar"], batch_size=batch_size)
 
         # Extract other metrics
-        turn_taking_probs = self.get_next_speaker_probs(
-            out["logits_vp"], vad=batch["vad"]
-        )
+        turn_taking_probs = self.VAP(logits=out["logits_vp"], va=batch["va"])
         self.val_metric.update(
             p=turn_taking_probs["p"],
-            pw=turn_taking_probs.get("pw", None),  # only in discrete
-            pre_probs=turn_taking_probs.get("pre_probs", None),  # only in independent
             bc_pred_probs=turn_taking_probs.get("bc_prediction", None),
             events=events,
         )
@@ -911,7 +409,7 @@ class VPModel(VadProjectionTask):
             self.test_metric.to(self.device)
 
         # extract events for metrics (use full vad including horizon)
-        events = self.test_metric.extract_events(batch["vad"])
+        events = self.test_metric.extract_events(va=batch["vad"], max_frame=1000)
 
         # Regular forward pass
         loss, out, batch = self.shared_step(batch)
@@ -919,25 +417,17 @@ class VPModel(VadProjectionTask):
 
         # log scores
         self.log("test_loss", loss["total"], batch_size=batch_size)
-        self.log("test_loss_vp", loss["vp"], batch_size=batch_size)
-        if "loss_ar" in loss:
-            self.log("test_loss_ar", loss["ar"], batch_size=batch_size)
 
         # Extract other metrics
-        turn_taking_probs = self.get_next_speaker_probs(
-            out["logits_vp"], vad=batch["vad"]
-        )
+        turn_taking_probs = self.VAP(logits=out["logits_vp"], va=batch["va"])
         self.test_metric.update(
             p=turn_taking_probs["p"],
-            pw=turn_taking_probs.get("pw", None),  # only in discrete
-            pre_probs=turn_taking_probs.get("pre_probs", None),  # only in independent
             bc_pred_probs=turn_taking_probs.get("bc_prediction", None),
             events=events,
         )
 
     def test_epoch_end(self, outputs) -> None:
         r = self.test_metric.compute()
-
         try:
             for metric_name, values in r.items():
                 if metric_name.startswith("pr_curve"):
@@ -965,32 +455,19 @@ class VPModel(VadProjectionTask):
         return parent_parser
 
 
-def debug_capencoder():
+def checkpoint_to_new(chpt):
+    new_chpt = {}
+    return new_chpt
+
+
+if __name__ == "__main__":
     from datasets_turntaking import DialogAudioDM
-
-    input_shape = (2, 40)
-    N = 1000
-    B = 4
-    D = 32
-    y = torch.randint(0, 2, (B, N, *input_shape), dtype=torch.float)
-    print("y: ", tuple(y.shape))
-
-    #######################################################################
-    # TEST CAPENCODER
-    enc = CAPEncoder(input_shape=input_shape, latent_dim=D, type="conv")
-    # self = enc
-
-    # z prediction
-    z_pred = torch.rand((B, N, D))
-    print("z_pred: ", tuple(z_pred.shape))
-    # contrastive loss for conv
-    l = enc.nce_loss(z_pred, y, n_negatives=5)
-    print("loss: ", l)
-    #######################################################################
-
-    out = enc.get_probs(z_pred, vad)
+    from conv_ssl.evaluation.utils import get_checkpoint
+    from conv_ssl.utils import to_device
 
     data_conf = DialogAudioDM.load_config()
+    DialogAudioDM.print_dm(data_conf)
+
     dm = DialogAudioDM(
         datasets=data_conf["dataset"]["datasets"],
         type=data_conf["dataset"]["type"],
@@ -1002,7 +479,7 @@ def debug_capencoder():
         ipu_min_time=data_conf["dataset"]["ipu_min_time"],
         ipu_pause_time=data_conf["dataset"]["ipu_pause_time"],
         vad_hz=100,
-        vad_horizon=2.0,
+        vad_horizon=2,
         vad_history=data_conf["dataset"]["vad_history"],
         vad_history_times=data_conf["dataset"]["vad_history_times"],
         batch_size=4,
@@ -1010,76 +487,27 @@ def debug_capencoder():
     )
     dm.prepare_data()
     dm.setup()
-    print(dm)
-    diter = iter(dm.val_dataloader())
-    batch = next(diter)
 
-    conf = VPModel.load_config(path="conv_ssl/config/model_latent.yaml")
+    ################################################
+    # Test new
+    ################################################
+    conf = VPModel.load_config()
     model = VPModel(conf)
+    for batch in dm.train_dataloader():
+        loss, out, batch = model.shared_step(to_device(batch, model.device))
+        print("Loss: ", loss["total"])
+        break
 
-    loss, out, batch = model.shared_step(batch)
-
-
-if __name__ == "__main__":
-    from argparse import ArgumentParser
-    from datasets_turntaking import DialogAudioDM
-    from conv_ssl.utils import count_parameters
-
-    parser = ArgumentParser()
-    parser = DialogAudioDM.add_data_specific_args(parser)
-    args = parser.parse_args()
-    data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
-    DialogAudioDM.print_dm(data_conf, args)
-
-    # Model
-    conf = VPModel.load_config(path="conv_ssl/config/model_independent.yaml")
-    # conf["vad_projection"]["regression"] = True
-    # conf["vad_projection"]["regression"] = True
-    # conf["vad_projection"]["comparative"] = True
-    # conf["vad_projection"]["bin_times"] = [0.05] * 40
-    # conf["vad_projection"][
-    #     "regression_loss"
-    # ] = "bce"  # 'mae', 'l1', 'mse' otherwise 'bce'
-    model = VPModel(conf)
-    n_params = count_parameters(model)
-    print(f"Parameters: {n_params}")
-    cuda = True
-    if cuda:
+    ################################################
+    # Load old
+    ################################################
+    run_path = "120k8fdv"
+    checkpoint_path = get_checkpoint(run_path=run_path)
+    checkpoint_path = load_paper_versions(checkpoint_path)
+    model = VPModel.load_from_checkpoint(checkpoint_path, strict=False)
+    if torch.cuda.is_available():
         model = model.to("cuda")
-
-    dm = DialogAudioDM(
-        datasets=data_conf["dataset"]["datasets"],
-        type=data_conf["dataset"]["type"],
-        sample_rate=data_conf["dataset"]["sample_rate"],
-        audio_duration=data_conf["dataset"]["audio_duration"],
-        audio_normalize=data_conf["dataset"]["audio_normalize"],
-        audio_overlap=data_conf["dataset"]["audio_overlap"],
-        audio_context_duration=data_conf["dataset"]["audio_context_duration"],
-        ipu_min_time=data_conf["dataset"]["ipu_min_time"],
-        ipu_pause_time=data_conf["dataset"]["ipu_pause_time"],
-        vad_hz=model.frame_hz,
-        vad_horizon=sum(model.conf["vad_projection"]["bin_times"]),
-        vad_history=data_conf["dataset"]["vad_history"],
-        vad_history_times=data_conf["dataset"]["vad_history_times"],
-        batch_size=4,
-        num_workers=0,
-    )
-    dm.prepare_data()
-    dm.setup()
-    print(dm)
-    diter = iter(dm.val_dataloader())
-
-    batch = next(diter)
-    if cuda:
-        for k, v in batch.items():
-            if isinstance(v, torch.Tensor):
-                batch[k] = v.to("cuda")
-    loss, out, batch = model.shared_step(batch)
-    turn_taking_probs = model.get_next_speaker_probs(out["logits_vp"], vad=batch["vad"])
-    for k, v in turn_taking_probs.items():
-        if isinstance(v, torch.Tensor):
-            print(f"{k}: {tuple(v.shape)}")
-        else:
-            print(f"{k}: {v}")
-
-    probs = out["logits_vp"].sigmoid()
+    model = model.eval()
+    for batch in dm.train_dataloader():
+        loss, out, batch = model.shared_step(to_device(batch, model.device))
+        print("Loss: ", loss["total"])
