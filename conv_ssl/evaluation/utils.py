@@ -108,3 +108,39 @@ def load_dm(
     dm.prepare_data()
     dm.setup(None)
     return dm
+
+
+# Temporary
+def load_paper_versions(checkpoint_path):
+    """
+    The code was reformatted and simplified and so some paramter names were changed.
+
+    This functions can load the checkpoints (at the paper version) and replace older names
+    to create a new state_dict appropriate for the new version
+
+    WARNING!
+    The optimizer state is not changed so will probably be bad to continue training with that optimizer
+    """
+
+    print("Old Paper version checkpoint -> new")
+
+    dir = dirname(checkpoint_path)
+    name = basename(checkpoint_path)
+    new_name = name.replace(".ckpt", "_new.ckpt")
+
+    chpt = torch.load(checkpoint_path)
+    sd = chpt["state_dict"]
+    from_to = {
+        "net.projection_head.weight": "net.vap_head.projection_head.weight",
+        "net.projection_head.bias": "net.vap_head.projection_head.bias",
+    }
+    new_sd = {}
+    for param, weight in sd.items():
+        if param in from_to:
+            print(param, "->", from_to[param])
+            param = from_to[param]
+        new_sd[param] = weight
+    chpt["state_dict"] = new_sd
+    new_path = join(dir, new_name)
+    torch.save(chpt, new_path)
+    return new_path

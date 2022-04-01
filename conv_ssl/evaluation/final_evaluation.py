@@ -480,6 +480,7 @@ def Extract_Final_Scores():
                 models[model]["thresh"]["std"].append(thresh.std())
 
 
+# TODO: move this to own file
 def get_majority_class_probs(events):
     """majority score"""
     # P: next speaker (used on active as well)
@@ -517,6 +518,7 @@ def get_majority_class_probs(events):
     return {"p": p, "bc_prediction": bc_probs}
 
 
+# TODO: move this to own file
 def majority_class_eval():
     everything_deterministic()
 
@@ -588,6 +590,7 @@ def majority_class_eval():
     print("f1 metrics: ", round(sh.item(), 3))
 
 
+# TODO: move this to evaluation
 def ANOVA():
     """statistics over aggreagate results"""
     # all_score = torch.load("assets/score/all_score_new.pt")
@@ -655,5 +658,4 @@ def ANOVA():
 if __name__ == "__main__":
 
     everything_deterministic()
-
     majority_class_eval()

@@ -12,40 +12,6 @@ from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
 from vap_turn_taking import VAP, TurnTakingMetrics
 
 
-def load_paper_versions(checkpoint_path):
-    """
-    The code was reformatted and simplified and so some paramter names were changed.
-
-    This functions can load the checkpoints (at the paper version) and replace older names
-    to create a new state_dict appropriate for the new version
-
-    WARNING!
-    The optimizer state is not changed so will probably be bad to continue training with that optimizer
-    """
-    from os.path import basename, dirname, join
-
-    dir = dirname(checkpoint_path)
-    name = basename(checkpoint_path)
-    new_name = name.replace(".ckpt", "_new.ckpt")
-
-    chpt = torch.load(checkpoint_path)
-    sd = chpt["state_dict"]
-    from_to = {
-        "net.projection_head.weight": "net.vap_head.projection_head.weight",
-        "net.projection_head.bias": "net.vap_head.projection_head.bias",
-    }
-    new_sd = {}
-    for param, weight in sd.items():
-        if param in from_to:
-            print(param, "->", from_to[param])
-            param = from_to[param]
-        new_sd[param] = weight
-    chpt["state_dict"] = new_sd
-    new_path = join(dir, new_name)
-    torch.save(chpt, new_path)
-    return new_path
-
-
 class VadCondition(nn.Module):
     def __init__(self, dim, vad_history=False, vad_history_bins=5) -> None:
         super().__init__()
@@ -254,8 +220,6 @@ class VPModel(pl.LightningModule):
             else:
                 n_bins = len(self.conf["vad_projection"]["bin_times"])
                 name += f"_ind_{n_bins}"
-        elif self.conf["vad_projection"]["latent"]:
-            name += "_latent"
         return name
 
     def summary(self):
@@ -311,7 +275,6 @@ class VPModel(pl.LightningModule):
             out:        dict
             batch:      same as input arguments (fixed for differenct encoder Hz)
         """
-
         # Get labels
         va_labels = self.VAP.extract_label(va=batch["vad"])
 
@@ -375,7 +338,7 @@ class VPModel(pl.LightningModule):
         self.log("val_loss", loss["total"], batch_size=batch_size)
 
         # Extract other metrics
-        turn_taking_probs = self.VAP(logits=out["logits_vp"], va=batch["va"])
+        turn_taking_probs = self.VAP(logits=out["logits_vp"], va=batch["vad"])
         self.val_metric.update(
             p=turn_taking_probs["p"],
             bc_pred_probs=turn_taking_probs.get("bc_prediction", None),
@@ -419,7 +382,7 @@ class VPModel(pl.LightningModule):
         self.log("test_loss", loss["total"], batch_size=batch_size)
 
         # Extract other metrics
-        turn_taking_probs = self.VAP(logits=out["logits_vp"], va=batch["va"])
+        turn_taking_probs = self.VAP(logits=out["logits_vp"], va=batch["vad"])
         self.test_metric.update(
             p=turn_taking_probs["p"],
             bc_pred_probs=turn_taking_probs.get("bc_prediction", None),
@@ -453,11 +416,6 @@ class VPModel(pl.LightningModule):
         default_conf = VPModel.load_config(format=None)
         parser = OmegaConfArgs.add_argparse_args(parser, default_conf)
         return parent_parser
-
-
-def checkpoint_to_new(chpt):
-    new_chpt = {}
-    return new_chpt
 
 
 if __name__ == "__main__":
