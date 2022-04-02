@@ -1,5 +1,5 @@
-from os.path import basename, dirname, join
-from os import environ, makedirs
+from os.path import join
+from os import makedirs, cpu_count
 
 import torch
 from pytorch_lightning import Trainer, Callback
@@ -7,7 +7,6 @@ from pytorch_lightning.loggers import WandbLogger
 
 from conv_ssl.model import VPModel
 from conv_ssl.utils import everything_deterministic, write_json
-from conv_ssl.evaluation.utils import get_checkpoint, load_paper_versions
 
 from datasets_turntaking import DialogAudioDM
 from vap_turn_taking import TurnTakingMetrics
@@ -43,62 +42,6 @@ BC_CONF = dict(
 )
 
 MIN_THRESH = 0.01
-
-
-model_ids = {
-    "discrete": {
-        "0": "1h52tpnn",
-        "1": "3fhjobk0",
-        "2": "120k8fdv",
-        "3": "1vx0omkd",
-        "4": "sbzhz86n",
-        "5": "1lyezca0",
-        "6": "2vtd1u1n",
-        "7": "2ldfo4rg",
-        "8": "2ca7uxad",
-        "9": "2fsy74rf",
-        "10": "3ik6jod6",
-    },
-    "independent": {
-        "0": "1t7vvo0c",
-        "1": "24bn5wi6",
-        "2": "1u7yzji0",
-        "3": "s5unjaj7",
-        "4": "10krujrj",
-        "5": "2rq33fxr",
-        "6": "3uqpk8e1",
-        "7": "3mpxa1iy",
-        "8": "3ulpo767",
-        "9": "3d952gec",
-        "10": "2651d3ln",
-    },
-    "independent_baseline": {
-        "0": "2mme28tm",
-        "1": "qo9mf26t",
-        "2": "2rrdm5ma",
-        "3": "mrzizwex",
-        "4": "1lximsk1",
-        "5": "2wyymo7n",
-        "6": "1nze8m3l",
-        "7": "1cdhj9yo",
-        "8": "kamzjel0",
-        "9": "15ze1p0y",
-        "10": "2mvwxxar",
-    },
-    "comparative": {
-        "0": "2kwhi1zi",
-        "1": "2izpsu6r",
-        "2": "23mzxhhd",
-        "3": "1lvk73tr",
-        "4": "11jlsatj",
-        "5": "nxvb62j4",
-        "6": "1pglrfbn",
-        "7": "1z9qyfh6",
-        "8": "1kgiwy2m",
-        "9": "1eluv8de",
-        "10": "2530040o",
-    },
-}
 
 
 def tensor_dict_to_json(d):
@@ -335,15 +278,8 @@ def find_threshold(model, dloader, min_thresh=0.01):
     return thresholds, predictions, curves
 
 
-def evaluate(model_id, savepath, batch_size, num_workers, checkpoint_path=None):
+def evaluate(checkpoint_path, savepath, batch_size, num_workers):
     """Evaluate model"""
-
-    savepath = join(savepath, model_id)
-
-    # checkpoint
-    if checkpoint_path is None:
-        checkpoint_path = get_checkpoint(run_path=model_id)
-        checkpoint_path = load_paper_versions(checkpoint_path)
 
     # Load model
     model = VPModel.load_from_checkpoint(checkpoint_path, strict=False)
@@ -354,6 +290,8 @@ def evaluate(model_id, savepath, batch_size, num_workers, checkpoint_path=None):
     # Load data
     data_conf = DialogAudioDM.load_config()
     DialogAudioDM.print_dm(data_conf)
+    print("Num Workers: ", num_workers)
+    print("Batch size: ", batch_size)
     dm = DialogAudioDM(
         datasets=data_conf["dataset"]["datasets"],
         type=data_conf["dataset"]["type"],
@@ -376,20 +314,17 @@ def evaluate(model_id, savepath, batch_size, num_workers, checkpoint_path=None):
     # Threshold
     # Find the best thresholds (S-pred, BC-pred, S/L) on the validation set
     print("#" * 60)
-    print("Finding Thresholds...")
+    print("Finding Thresholds (val-set)...")
     print("#" * 60)
-    # thresholds, prediction, curves = find_threshold(
-    #     model, dm.val_dataloader(), min_thresh=MIN_THRESH
-    # )
     thresholds, prediction, curves = find_threshold(
-        model, dm.test_dataloader(), min_thresh=MIN_THRESH
+        model, dm.val_dataloader(), min_thresh=MIN_THRESH
     )
     torch.save(prediction, join(savepath, "predictions.pt"))
     torch.save(curves, join(savepath, "curves.pt"))
 
     # Score
     print("#" * 60)
-    print("Final Score...")
+    print("Final Score (test-set)...")
     print("#" * 60)
     model.test_metric = TurnTakingMetrics(
         hs_kwargs=HS_CONF,
@@ -416,8 +351,13 @@ def evaluate(model_id, savepath, batch_size, num_workers, checkpoint_path=None):
 
 
 if __name__ == "__main__":
+    from conv_ssl.evaluation.utils import get_checkpoint, load_paper_versions
+
     everything_deterministic()
     model_id = "120k8fdv"
+    checkpoint_path = get_checkpoint(run_path=model_id)
+    checkpoint_path = load_paper_versions(checkpoint_path)
+
     metrics, prediction, curves = evaluate(
-        model_id, savepath="metric_test", batch_size=16, num_workers=4
+        model_id, savepath="metric_test", batch_size=16, num_workers=cpu_count()
     )
