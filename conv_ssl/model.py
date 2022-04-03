@@ -45,14 +45,13 @@ class VadCondition(nn.Module):
 class VAPHead(nn.Module):
     def __init__(self, input_dim, n_bins=4, type="discrete"):
         super().__init__()
-
         self.type = type
 
         if type == "comparative":
             self.projection_head = nn.Linear(input_dim, 1)
         else:
             self.total_bins = 2 * n_bins
-            if type == "regression":
+            if type == "independent":
                 self.projection_head = nn.Sequential(
                     nn.Linear(input_dim, self.total_bins),
                     Rearrange("... (c f) -> ... c f", c=2, f=self.total_bins // 2),
@@ -161,6 +160,7 @@ class VPModel(pl.LightningModule):
             type=self.vap_type,
             bin_times=conf["vad_projection"]["bin_times"],
             frame_hz=self.net.encoder.frame_hz,
+            pre_frames=conf["vad_projection"]["regression_pre_frames"],
             threshold_ratio=conf["vad_projection"]["vad_threshold"],
         )  # logits -> zero-shot probs etc
 
@@ -281,6 +281,8 @@ class VPModel(pl.LightningModule):
         # Only keep the relevant vad information
         n_valid = va_labels.shape[1]
         batch["vad"] = batch["vad"][:, :n_valid]
+        if "vad_history" in batch:
+            batch["vad_history"] = batch["vad_history"][:, :n_valid]
 
         # Forward pass
         out = self(
@@ -288,16 +290,7 @@ class VPModel(pl.LightningModule):
             va=batch["vad"],
             va_history=batch.get("vad_history", None),
         )
-
         out["va_labels"] = va_labels
-
-        # Resize batch/use-subset to match encoder output size
-        # some encoders (wav2vec, vq_wav2vec) drops 2 frames on 10sec audio
-        # some encoders (wavlm_base, hubert) drops 1 frames (after downsampling) on 10sec audio
-        n_frames = out["logits_vp"].shape[1]
-        batch["vad"] = batch["vad"][:, :n_frames]
-        if "vad_history" in batch:
-            batch["vad_history"] = batch["vad_history"][:, :n_frames]
 
         # Calculate Loss
         loss = self.calc_losses(
