@@ -1,5 +1,4 @@
-from os.path import join, isdir
-from os import listdir
+from os.path import join
 from glob import glob
 
 import torch
@@ -23,22 +22,6 @@ METRIC_NAMES = [
 ]
 
 STATS_NAMES = ["SH", "SL", "S-pred", "BC-pred"]
-
-# """statistics over aggreagate results"""
-# # all_score = torch.load("assets/score/all_score_new.pt")
-# all_score = torch.load("assets/score/all_score.pt")
-# result = {}
-# for model in ["discrete", "independent", "independent_baseline"]:
-#     result[model] = {
-#         "SH": round(torch.tensor(all_score[model]["f1_hold_shift"]).mean().item(), 3),
-#         "SL": round(torch.tensor(all_score[model]["f1_short_long"]).mean().item(), 3),
-#         "S-pred": round(
-#             torch.tensor(all_score[model]["f1_predict_shift"]).mean().item(), 3
-#         ),
-#         "BC-pred": round(
-#             torch.tensor(all_score[model]["f1_bc_prediction"]).mean().item(), 3
-#         ),
-#     }
 
 
 def load_all_scores(root="assets/paper_evaluation"):
@@ -87,6 +70,7 @@ def load_all_scores(root="assets/paper_evaluation"):
 
 def anova(all_score):
     statistics = {name: {} for name in STATS_NAMES}
+    averages = {}
     for stat_name in STATS_NAMES:
         # Get score for the different groups
         m_discrete = all_score["discrete"][stat_name]
@@ -95,6 +79,11 @@ def anova(all_score):
 
         anova_result = stats.f_oneway(m_discrete, m_ind, m_ind_base)
         statistics[stat_name] = anova_result.pvalue
+        averages[stat_name] = {
+            "discrete": torch.tensor(m_discrete).mean().item(),
+            "independent": torch.tensor(m_ind).mean().item(),
+            "independent_baseline": torch.tensor(m_ind_base).mean().item(),
+        }
 
         # ad-hoc test
         d_vs_i = stats.ttest_ind(m_discrete, m_ind)
