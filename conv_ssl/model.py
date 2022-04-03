@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 
 
 from conv_ssl.models import Encoder, AR
-from conv_ssl.utils import OmegaConfArgs, repo_root, load_config
+from conv_ssl.utils import OmegaConfArgs, repo_root, load_config, to_device
 
 from vap_turn_taking import VAP, TurnTakingMetrics
 
@@ -301,6 +301,15 @@ class VPModel(pl.LightningModule):
 
         loss = {"vp": loss.mean(), "total": loss.mean()}
         return loss, out, batch
+
+    def output(self, batch, out_device="cpu"):
+        loss, out, batch = self.shared_step(to_device(batch, self.device))
+        probs = self.VAP(logits=out["logits_vp"], va=batch["vad"])
+        batch = to_device(batch, out_device)
+        out = to_device(out, out_device)
+        loss = to_device(loss, out_device)
+        probs = to_device(probs, out_device)
+        return loss, out, probs, batch
 
     def training_step(self, batch, batch_idx, **kwargs):
         loss, _, _ = self.shared_step(batch)
