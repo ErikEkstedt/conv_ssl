@@ -1,6 +1,8 @@
 train="python conv_ssl/train_disk.py --gpus -1 --batch_size 50 --patience 20 --val_check_interval 0.5"
 
 
+# Used in the paper to evaluate models over kfold-splits
+
 for i in 0 1 2 3 4 5 6 7 8 9 10
 do
  $train --conf conv_ssl/config/model.yaml \
