@@ -2,15 +2,20 @@
 
 Model training for the paper [Voice Activity Projection: Self-supervised Learning of Turn-taking Events]() using [pytorch_lightning](https://pytorch-lightning.readthedocs.io/en/latest/).
 
+* [vap_turn_taking](https://github.com/ErikEkstedt/vap_turn_taking)
+  - A model agnostic module used for Voice Activity Projection
+* [datasets_turntaking](https://github.com/ErikEkstedt/datasets_turntaking)
+  - WARNING: Requires [Switchboard](https://catalog.ldc.upenn.edu/LDC97S62) audio files
+
 
 ## Installation
+
 * Create conda env: `conda create -n conv_ssl python=3.9`
   - source env: `conda source conv_ssl`
 * PyTorch: `conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch`
 * Dependencies: `pip install -r requirements.txt`
 * install conv_ssl: `pip install -e .`
-
-* DATASET
+* **DATASET**
   - WARNING: Requires [Switchboard](https://catalog.ldc.upenn.edu/LDC97S62) audio files
   * Install [datasets_turntaking](https://github.com/ErikEkstedt/datasets_turntaking)
     - clone repo `git clone https://github.com/ErikEkstedt/datasets_turntaking.git`
@@ -96,14 +101,15 @@ metric_kwargs = event_settings['metric']
     ```bash
     python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model.yaml
     ```
-* Independent: similar to [Skantze]() with bins like 'discrete'.
-    ```bash
-    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent.yaml
-    ```
-* Independent-40: similar to [Skantze]() with similar bin count.
-    ```bash
-    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent_baseline.yaml
-    ```
+* Independent: similar to [Towards a General, Continuous Model of Turn-taking in Spoken Dialogue using LSTM Recurrent Neural Networks, Skantze](https://aclanthology.org/W17-5527/)
+  - Bins like 'discrete'.
+      ```bash
+      python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent.yaml
+      ```
+  - Independent-40: with similar bin count.
+      ```bash
+      python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent_baseline.yaml
+      ```
 * Comparative:
     ```bash
     python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/comparative.yaml
@@ -127,6 +133,9 @@ python conv_ssl/evaluation/evaluation.py --checkpoint $PATH_TO_CHPT --savepath $
 
 We ran model using kfold splits (see `conv_ssl/config/swb_kfolds`) over 4 different model architectures ('discrete', 'independent', 'independent-40', 'comparative').
 
+* Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
+* train on samples on disk: `conv_ssl/train_disk.py` 
+* run `scripts/model_kfold.bash`
 * We evaluate (find threshold over validation set + final evaluation on test-set)
   - see `conv_ssl/evaluation/evaluate_paper_model.py`
   - the ids are the `WandB` ids.
