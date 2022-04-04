@@ -95,7 +95,6 @@ def anova(all_score):
 
 
 if __name__ == "__main__":
-
     scores = load_all_scores()
     # for stat, vals in scores["discrete"].items():
     #     vals = torch.tensor(vals)

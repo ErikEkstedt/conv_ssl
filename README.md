@@ -1,56 +1,35 @@
 # Continuous Conversational SSL
 
-* Causal
-* Audio
-* Timing
-
-
-```bash
-ConvSSL
-├── assets
-│   └── checkpoints
-│       ├── cpc
-│       │   └── 60k_epoch4-d0f474de.pt
-│       ├── hubert
-│       │   └── hubert_fairseq_base_ls960.pth
-│       ├── wav2vec2
-│       │   └── wav2vec2_fairseq_base_ls960.pth
-│       └── wavlm
-│           ├── WavLM-Base+.pt
-│           └── WavLM-Base.pt
-├── config
-│   ├── conv_ssl.yaml
-│   ├── ulm_small.yaml
-│   └── ulm.yaml
-├── tests/
-├── encoder.py
-├── projection_model.py
-├── ulm_projection.py
-├── dataset_kmean_idx.py
-├── train_kmeans.py
-├── evaluation.py
-├── pretrained_encoders.py
-├── utils.py
-├── callbacks.py
-└── README.md
-```
+Model training for the paper [Voice Activity Projection: Self-supervised Learning of Turn-taking Events]() using [pytorch_lightning](https://pytorch-lightning.readthedocs.io/en/latest/).
 
 
 ## Installation
-
-* Create conda env: `conda create -n conv_ssl python=3`
+* Create conda env: `conda create -n conv_ssl python=3.9`
   - source env: `conda source conv_ssl`
 * PyTorch: `conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch`
-* [Optional] (for videos) Install FFMPEG: `conda install -c conda-forge ffmpeg`
 * Dependencies: `pip install -r requirements.txt`
 * install conv_ssl: `pip install -e .`
-* Install [Datasets turn-taking](https://github.com/ErikEkstedt/datasets_turntaking)
+
+* DATASET
+  - WARNING: Requires [Switchboard](https://catalog.ldc.upenn.edu/LDC97S62) audio files
+  * Install [datasets_turntaking](https://github.com/ErikEkstedt/datasets_turntaking)
     - clone repo `git clone https://github.com/ErikEkstedt/datasets_turntaking.git`
     - cd to repo, and install dependencies: `pip install -r requirements.txt`
     - install repo: `pip install -e .`
 
-## Docker
+## Pretrained Encoders
+The pretrained encoder checkpoint is downloaded from the original repo (or from torch.hub through torchaudio).
 
+* [CPC](https://github.com/facebookresearch/CPC_audio)
+  - requires installation of source
+  - that is clone [CPC_audio](https://github.com/facebookresearch/CPC_audio)
+    - cd to repo
+    - Install dependencies (see repository) but probably you'll need
+      - `pip install cython`
+    - run: `python setup.py develop`  (again see original implementation)
+  - **automatically** downloads checkpoints
+
+## Docker
 * Requires [Nvidia-Docker]() for gpu support.
   * [Nvidia Docker Github](https://github.com/NVIDIA/nvidia-docker)
   * [github.io docs](https://nvidia.github.io/nvidia-docker/)
@@ -65,106 +44,98 @@ ConvSSL
   * Computational constraints
   * Run: `docker run --rm -it --gpus '"device=4,5,6,7"' -m=128g --cpus=16 --shm-size=16g -v=$(pwd):/workspace -v=$HOME/projects/data:/root/projects/data conv_ssl`
 
-## Pretrained Encoders
-
-The pretrained encoder checkpoints are downloaded from the original repos (see tree-structure above for paths)
-or from torch.hub through torchaudio.
-
-* [CPC](https://github.com/facebookresearch/CPC_audio)
-  - requires installation of source
-  - that is clone [CPC_audio](https://github.com/facebookresearch/CPC_audio), cd to repo, run `python setup.py develop`
-  - **automatically** downloads checkpoints
-* Unused
-  * [WavLM-Base & WavLM-Base+](https://github.com/microsoft/unilm/tree/master/wavlm)
-    - download the checkpoints
-  * [Hubert & Wav2vec2](https://pytorch.org/audio/stable/models.html#wav2vec2-0-hubert) are downloaded through `torchaudio` (downloads to `~/.cache/torch/hub/checkpoints/` by default)
-  * [Wav2vec, vq-wav2vec]()
-
-
-
 ## Experiments
 
-
-Default
-
-```bash
-python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model.yaml
-```
-
-Regression with bins like default
-```bash
-python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_regression.yaml
-```
-
-Regression with bins like [Skantze]()
-
-```bash
-python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_regression_baseline.yaml
-```
-
-
-## UNUSED
+* Training uses [WandB](https://wandb.ai) by default.
+* The event settings used in the paper are included in `conv_ssl/config/event_settings.json`.
+  - See paper Section 3
 
 ```python
-from torchaudio.pipelines import HUBERT_BASE, WAV2VEC2_BASE
-#Hubert
-model = HUBERT_BASE.get_model()
-# or
-model = WAV2VEC2_BASE.get_model()
+from conv_ssl.utils import read_json
+
+event_settings = read_json("conv_ssl/config/event_settings.json")
+hs_kwargs = event_settings['hs']
+bc_kwargs = event_settings['bc']
+metric_kwargs = event_settings['metric']
 ```
 
+```json
+{
+  "hs": {
+    "post_onset_shift": 1,
+    "pre_offset_shift": 1,
+    "post_onset_hold": 1,
+    "pre_offset_hold": 1,
+    "non_shift_horizon": 2,
+    "metric_pad": 0.05,
+    "metric_dur": 0.1,
+    "metric_pre_label_dur": 0.5,
+    "metric_onset_dur": 0.2
+  },
+  "bc": {
+    "max_duration_frames": 1.0,
+    "pre_silence_frames": 1.0,
+    "post_silence_frames": 2.0,
+    "min_duration_frames": 0.2,
+    "metric_dur_frames": 0.2,
+    "metric_pre_label_dur": 0.5
+  },
+  "metric": {
+    "pad": 0.05,
+    "dur": 0.1,
+    "pre_label_dur": 0.5,
+    "onset_dur": 0.2,
+    "min_context": 3.0
+  }
+}
+```
 
-## Train ULM Only (precompute units and save to disk)
+### Train
 
-### 1. Extract Features
+* Discrete
+    ```bash
+    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model.yaml
+    ```
+* Independent: similar to [Skantze]() with bins like 'discrete'.
+    ```bash
+    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent.yaml
+    ```
+* Independent-40: similar to [Skantze]() with similar bin count.
+    ```bash
+    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent_baseline.yaml
+    ```
+* Comparative:
+    ```bash
+    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/comparative.yaml
+    ```
+* For faster training we saved all samples to disk and load directly
+  - Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
+  - train on samples on disk: `conv_ssl/train_disk.py` 
+  - SCRIPTS `conv_ssl/scripts`. Please look in script to get an idea of what they're doing...
+    - `scripts/model_kfold.bash` for kfold training in paper
+    - `scripts/test_models_script.bash` testing model training (`--fast_dev_run 1`)
+    - `scripts/train_script.bash` testing model training (`--fast_dev_run 1`)
 
-Loads pretrained encoders (Hubert, wav2vec2) and extracts features over a subset of the
-data (defined in memory (Gb) by `--kmeans_max_feature_memory`) which are (optionally) saved to disk.
 
-Those features are then used to train a kmeans model (with k given by `--k`).
-
-After the kmeans model is completed we iterate over the entire dataset (or
-maximum batches, for debugging, given by `--feature_dataset_max_batches`) and
-extracts the aligned VAD-labels and the Kmeans-indices which are saved to disk.
-
-These features are then used to train a sequence model on the (fixed) units for any downstream task.
-
+### Evaluate
 
 ```bash
-python conv_ssl/train_kmeans.py \
-        --savepath dataset_units \
-        --model hubert \
-        --kmeans_max_feature_memory 10 \
-        --extract_dataset # flag to also precompute units over the datasets
-        # --overwrite_kmeans  # if you want to retrain kmeans
-        # --overwrite_features  # if you want to re-extract features for kmeans
+python conv_ssl/evaluation/evaluation.py --checkpoint $PATH_TO_CHPT --savepath $PATH_TO_SAVEDIR --batch_size 4
 ```
 
+### Paper
 
-### 2. Train ULM + VAD-pred sequence models
+We ran model using kfold splits (see `conv_ssl/config/swb_kfolds`) over 4 different model architectures ('discrete', 'independent', 'independent-40', 'comparative').
+
+* We evaluate (find threshold over validation set + final evaluation on test-set)
+  - see `conv_ssl/evaluation/evaluate_paper_model.py`
+  - the ids are the `WandB` ids.
+  - We save all model scores to disk
+* In `conv_ssl/evaluation/anova.py` we compare the scores to extract the final values in the paper.
 
 
-```bash
-python ulm_vad_prediction.py
+## Citation
+
+```latex
+TBA
 ```
-
-
-### 3. Train SCPC+ model
-
-```bash
-python conv_ssl.py
-```
-
-
-## Model
-
-We extend upon the [CPC]() model to encode hierarchical information relevant to
-prosodic features (F0 and Activity). The model operates as the original CPC on
-lower level features (100hz) while also reconstructing the F0, from the
-observed data x, and predict a granular representation, of the future of the
-conversation, which is defined the the Voice Activity over both channels.
-
-Utilizing data from monologue recordings we can keep everything the same and
-pretend like there is another interlocutor that is always quiet. We do not wish
-to introduce duration information from the monologue speech such that the model
-becomes bias to predict Holds.

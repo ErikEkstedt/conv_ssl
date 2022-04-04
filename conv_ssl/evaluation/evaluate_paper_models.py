@@ -73,6 +73,7 @@ for model_type, ids in model_ids.items():
         makedirs(instance_root, exist_ok=True)
 
         # get checkpoint from wandb-ID
+        # change in repo requires slight change of `state_dict`
         checkpoint_path = get_checkpoint(run_path=id)
         checkpoint_path = load_paper_versions(checkpoint_path)
 

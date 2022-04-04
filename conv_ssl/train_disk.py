@@ -1,6 +1,5 @@
-from os.path import join, split, basename
 from argparse import ArgumentParser
-from os import makedirs, environ, cpu_count
+from os import makedirs, environ
 
 import torch
 import pytorch_lightning as pl

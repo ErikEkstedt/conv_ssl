@@ -6,42 +6,18 @@ from pytorch_lightning import Trainer, Callback
 from pytorch_lightning.loggers import WandbLogger
 
 from conv_ssl.model import VPModel
-from conv_ssl.utils import everything_deterministic, write_json
+from conv_ssl.utils import everything_deterministic, write_json, read_json
 
 from datasets_turntaking import DialogAudioDM
 from vap_turn_taking import TurnTakingMetrics
 
+d = read_json("conv_ssl/config/event_settings.json")
+METRIC_CONF = d["metric"]
+HS_CONF = d["hs"]
+BC_CONF = d["bc"]
+MIN_THRESH = 0.01  # minimum threshold limit for S/L, S-pred, BC-pred
 
-METRIC_CONF = dict(
-    pad=0.05,  # int, pad on silence (shift/hold) onset used for evaluating\
-    dur=0.1,  # int, duration off silence (shift/hold) used for evaluating\
-    pre_label_dur=0.5,  # int, frames prior to Shift-silence for prediction on-active shift
-    onset_dur=0.2,
-    min_context=3.0,
-)
-
-HS_CONF = dict(
-    post_onset_shift=1,
-    pre_offset_shift=1,
-    post_onset_hold=1,
-    pre_offset_hold=1,
-    non_shift_horizon=2,
-    metric_pad=METRIC_CONF["pad"],
-    metric_dur=METRIC_CONF["dur"],
-    metric_pre_label_dur=METRIC_CONF["pre_label_dur"],
-    metric_onset_dur=METRIC_CONF["onset_dur"],
-)
-
-BC_CONF = dict(
-    max_duration_frames=1.0,
-    pre_silence_frames=1.0,
-    post_silence_frames=2.0,
-    min_duration_frames=METRIC_CONF["onset_dur"],
-    metric_dur_frames=METRIC_CONF["onset_dur"],
-    metric_pre_label_dur=METRIC_CONF["pre_label_dur"],
-)
-
-MIN_THRESH = 0.01
+everything_deterministic()
 
 
 def tensor_dict_to_json(d):
@@ -351,13 +327,18 @@ def evaluate(checkpoint_path, savepath, batch_size, num_workers):
 
 
 if __name__ == "__main__":
-    from conv_ssl.evaluation.utils import get_checkpoint, load_paper_versions
+    from argparse import ArgumentParser
 
-    everything_deterministic()
-    model_id = "120k8fdv"
-    checkpoint_path = get_checkpoint(run_path=model_id)
-    checkpoint_path = load_paper_versions(checkpoint_path)
+    parser = ArgumentParser()
+    parser.add_argument("--checkpoint", type=str)
+    parser.add_argument("--savepath", type=str, default="assets")
+    parser.add_argument("--batch_size", type=int, default=16)
+    args = parser.parse_args()
 
+    # Saves all scores to `savepath`
     metrics, prediction, curves = evaluate(
-        model_id, savepath="metric_test", batch_size=16, num_workers=cpu_count()
+        args.checkpoint,
+        savepath=args.savepath,
+        batch_size=args.batch_size,
+        num_workers=cpu_count(),
     )

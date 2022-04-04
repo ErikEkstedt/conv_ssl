@@ -1,7 +1,6 @@
 from argparse import ArgumentParser
 from os import cpu_count, makedirs
 from os.path import join
-from tqdm import tqdm
 
 import torch
 from datasets_turntaking import DialogAudioDM

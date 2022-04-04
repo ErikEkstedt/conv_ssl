@@ -5,11 +5,15 @@ import einops
 from einops.layers.torch import Rearrange
 import pytorch_lightning as pl
 
-
 from conv_ssl.models import Encoder, AR
-from conv_ssl.utils import OmegaConfArgs, repo_root, load_config, to_device
-
+from conv_ssl.utils import OmegaConfArgs, repo_root, read_json, load_config, to_device
 from vap_turn_taking import VAP, TurnTakingMetrics
+
+
+d = read_json("conv_ssl/config/event_settings.json")
+METRIC_CONF = d["metric"]
+HS_CONF = d["hs"]
+BC_CONF = d["bc"]
 
 
 class VadCondition(nn.Module):
@@ -47,6 +51,7 @@ class VAPHead(nn.Module):
         super().__init__()
         self.type = type
 
+        self.output_dim = 1
         if type == "comparative":
             self.projection_head = nn.Linear(input_dim, 1)
         else:
@@ -56,9 +61,16 @@ class VAPHead(nn.Module):
                     nn.Linear(input_dim, self.total_bins),
                     Rearrange("... (c f) -> ... c f", c=2, f=self.total_bins // 2),
                 )
+                self.output_dim = (2, n_bins)
             else:
                 self.n_classes = 2 ** self.total_bins
                 self.projection_head = nn.Linear(input_dim, self.n_classes)
+
+    def __repr__(self):
+        s = "VAPHead\n"
+        s += f"  type: {self.type}"
+        s += f"  output: {self.output_dim}"
+        return super().__repr__()
 
     def forward(self, x):
         return self.projection_head(x)
@@ -165,7 +177,7 @@ class VPModel(pl.LightningModule):
         )  # logits -> zero-shot probs etc
 
         # conf
-        self.frame_hz = self.net.encoder.frame_hz
+        # self.frame_hz = self.net.encoder.frame_hz
         self.conf = conf
 
         # Metrics
@@ -179,6 +191,10 @@ class VPModel(pl.LightningModule):
         self.weight_decay = conf["optimizer"]["weight_decay"]
         self.save_hyperparameters()
 
+    @property
+    def frame_hz(self):
+        return self.net.encoder.frame_hz
+
     def init_metric(
         self,
         conf,
@@ -189,17 +205,18 @@ class VPModel(pl.LightningModule):
         bc_pred_pr_curve=False,
         shift_pred_pr_curve=False,
         long_short_pr_curve=False,
-        **event_kwargs,
     ):
         metric = TurnTakingMetrics(
+            hs_kwargs=HS_CONF,
+            bc_kwargs=BC_CONF,
+            metric_kwargs=METRIC_CONF,
             threshold_pred_shift=threshold_pred_shift,
             threshold_short_long=threshold_short_long,
             threshold_bc_pred=threshold_bc_pred,
-            bc_pred_pr_curve=bc_pred_pr_curve,
             shift_pred_pr_curve=shift_pred_pr_curve,
+            bc_pred_pr_curve=bc_pred_pr_curve,
             long_short_pr_curve=long_short_pr_curve,
-            frame_hz=frame_hz,
-            **event_kwargs,
+            frame_hz=self.frame_hz,
         )
         metric = metric.to(self.device)
         return metric
@@ -212,7 +229,6 @@ class VPModel(pl.LightningModule):
     def run_name(self):
         # Name the run e.g. hubert_44_41
         name = self.conf["encoder"]["type"].replace("_base", "")
-        name += f"_{self.conf['ulm']['num_layers']}{self.conf['ulm']['num_heads']}"
         name += f"_{self.conf['ar']['num_layers']}{self.conf['ar']['num_heads']}"
         if self.conf["vad_projection"]["regression"]:
             if self.conf["vad_projection"]["comparative"]:
@@ -224,21 +240,8 @@ class VPModel(pl.LightningModule):
 
     def summary(self):
         s = "VPModel\n"
-        s += "Encoder\n"
-        s += f"\ttype: {self.conf['encoder']['type']}\n"
-        s += f"\toutput_layer: {self.conf['encoder']['output_layer']}\n"
-        s += f"\tHz: {self.net.encoder.frame_hz}\n"
-        s += f"\tquantizer n_codes: {self.conf['quantizer']['n_codes']}\n"
-        s += "AR\n"
-        s += f"\tnum_layers: {self.conf['ar']['num_layers']}\n"
-        s += f"\tnum_heads: {self.conf['ar']['num_heads']}\n"
-        s += f"\tdim: {self.conf['ar']['dim']}\n"
-        s += "VAPHead\n"
-        s += f"\tregression: {self.regression}\n"
-        s += f"\thead: {self.net.vap_head}\n"
-        s += f"\tbin_times: {self.conf['vad_projection']['bin_times']}\n"
-        if self.regression:
-            s += f"\nregression_loss: {self.conf['vad_projection']['regression_loss']}"
+        s += f"{self.net}"
+        s += f"{self.VAP}"
         return s
 
     def configure_optimizers(self):
@@ -302,6 +305,7 @@ class VPModel(pl.LightningModule):
         loss = {"vp": loss.mean(), "total": loss.mean()}
         return loss, out, batch
 
+    @torch.no_grad()
     def output(self, batch, out_device="cpu"):
         loss, out, batch = self.shared_step(to_device(batch, self.device))
         probs = self.VAP(logits=out["logits_vp"], va=batch["vad"])

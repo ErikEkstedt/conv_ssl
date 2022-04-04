@@ -13,9 +13,11 @@ everything_deterministic()
 if __name__ == "__main__":
 
     # Load model
-    model_id = "120k8fdv"
-    checkpoint_path = get_checkpoint(run_path=model_id)
-    checkpoint_path = load_paper_versions(checkpoint_path)
+    # model_id = "120k8fdv"
+    # checkpoint_path = get_checkpoint(run_path=model_id)
+    # checkpoint_path = load_paper_versions(checkpoint_path)
+    checkpoint_path = "./artifacts/model-120k8fdv:v0/model_new.ckpt"
+
     model = VPModel.load_from_checkpoint(checkpoint_path, strict=False)
     model = model.eval()
     if torch.cuda.is_available():
@@ -44,7 +46,6 @@ if __name__ == "__main__":
     dm.setup(None)
 
     dset = dm.val_dset
-
     # chunk dialog -> segments -> order in batch (to fit gpu)
     audio_duration = 10
     audio_overlap = 5
@@ -60,7 +61,7 @@ if __name__ == "__main__":
     # Combine all data
     start_frame = int(audio_overlap * dm.vad_hz)
     start_sample = int(audio_overlap * dm.sample_rate)
-    video = {"waveform": [], "va": [], "vh": [], "p": [], "p_bc": []}
+    video = {"waveform": [], "va": [], "vh": [], "p": [], "p_bc": [], "logits": []}
     for i, batch in enumerate(tqdm(batches)):
         loss, out, probs, batch = model.output(batch)
         tmp_batch_size = out["logits_vp"].shape[0]
@@ -71,6 +72,7 @@ if __name__ == "__main__":
             video["vh"].append(batch["vad_history"][0].to("cpu"))
             video["p"].append(probs["p"][0].to("cpu"))
             video["p_bc"].append(probs["bc_prediction"][0].to("cpu"))
+            video["logits"].append(out["logits_vp"][0].to("cpu"))
             start_batch = 1
         for n in range(start_batch, tmp_batch_size):
             video["waveform"].append(batch["waveform"][n, start_sample:].to("cpu"))
@@ -78,10 +80,11 @@ if __name__ == "__main__":
             video["vh"].append(batch["vad_history"][n, start_frame:].to("cpu"))
             video["p"].append(probs["p"][n, start_frame:].to("cpu"))
             video["p_bc"].append(probs["bc_prediction"][n, start_frame:].to("cpu"))
+            video["logits"].append(out["logits_vp"][n, start_frame:].to("cpu"))
 
     for name, vallist in video.items():
         video[name] = torch.cat(vallist)
-
-    torch.save(video, "assets/video.pt")
+    video["vap_bins"] = model.VAP.vap_bins.cpu()
 
     # save to disk
+    torch.save(video, "assets/video.pt")
