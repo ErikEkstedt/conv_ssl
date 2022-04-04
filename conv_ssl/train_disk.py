@@ -53,6 +53,12 @@ def train():
     pl.seed_everything(args.seed)
     args.deterministic = True
 
+    if args.train_files is None:
+        raise NotImplementedError('Must provide "--train_files"... Abort')
+
+    if args.val_files is None:
+        raise NotImplementedError('Must provide "--val_files"... Abort')
+
     local_rank = environ.get("LOCAL_RANK", 0)
 
     #########
