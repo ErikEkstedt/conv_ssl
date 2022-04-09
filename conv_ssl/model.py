@@ -6,7 +6,7 @@ from einops.layers.torch import Rearrange
 import pytorch_lightning as pl
 
 from conv_ssl.models import Encoder, AR
-from conv_ssl.utils import repo_root, load_config, to_device
+from conv_ssl.utils import to_device
 from vap_turn_taking import VAP, TurnTakingMetrics
 
 

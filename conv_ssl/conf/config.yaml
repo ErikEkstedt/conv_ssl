@@ -1,5 +1,5 @@
 defaults:
-  - model: model
+  - model: discrete
   - events: events
   - trainer: trainer
   - data: data
@@ -10,7 +10,6 @@ verbose: false
 wandb:
   project: 'VAP'
   dont_log_model: true
-
 
 optimizer:
   alpha: 0.6
