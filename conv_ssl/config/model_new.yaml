@@ -1,0 +1,57 @@
+model:
+  encoder:
+    pretrained: true
+    output_layer: 1
+    sample_rate: 16000
+    type: cpc
+    target_frame_hz: 0
+    downsample: null # mean, maxpool, cnn
+    features: null
+
+  quantizer:
+    type: kmeans # VQ
+    vector_path: null
+    n_codes: 0
+
+  ar:
+    type: 'transformer'
+    dim: 256
+    num_layers: 4
+    num_heads: 4
+    use_pos_emb: 1
+    abspos: true
+    sizeSeq: 1024
+    dff_k: 3
+    dropout: 0.4
+
+  va_cond:
+    history: true
+    history_bins: 5
+
+vap:
+  bin_times: [.2, .4, .6, .8]
+  comparative: false
+  independent: false
+  threshold: 0.5
+  event_pre: 0.5
+
+events:
+  min_context: 3.0
+  horizon: 2.0
+  start_pad: 0.05
+  target_duration: 0.10
+  shift_pre_offset: 1.0
+  shift_post_onset: 1.0
+  hold_pre_offset: 1.0
+  hold_post_onset: 1.0
+  bc_pre_silence: 1
+  bc_post_silence: 2
+  bc_max_active: 1
+  bc_prediction_window: 0.5
+  bc_ongoing_threshold: 0.5
+
+optimizer:
+  alpha: 0.6
+  learning_rate: 3.63e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.001

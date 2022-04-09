@@ -1,0 +1,18 @@
+datasets: ["switchboard"]
+type: "sliding"
+sample_rate: 16000
+audio_mono: true
+audio_duration: 10
+audio_normalize: true
+audio_overlap: 2
+# VAD
+vad_hz: 100
+vad_horizon: 2
+vad_history: true
+vad_history_times: [60, 30, 10, 5]
+# Data
+train_files: null
+val_files: null
+test_files: null
+batch_size: 4
+num_workers: 4

@@ -7,7 +7,7 @@ from datasets_turntaking import DialogAudioDM
 
 def run_path_to_project_id(run_path):
     id = basename(run_path)  # 1xon133f
-    project = dirname(run_path)  #  how_so/ULMProjection
+    project = dirname(run_path)  #  USER_NAME/PROJECT
     return project, id
 
 

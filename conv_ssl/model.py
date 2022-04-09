@@ -6,42 +6,36 @@ from einops.layers.torch import Rearrange
 import pytorch_lightning as pl
 
 from conv_ssl.models import Encoder, AR
-from conv_ssl.utils import OmegaConfArgs, repo_root, read_json, load_config, to_device
+from conv_ssl.utils import repo_root, load_config, to_device
 from vap_turn_taking import VAP, TurnTakingMetrics
 
 
-d = read_json("conv_ssl/config/event_settings.json")
-METRIC_CONF = d["metric"]
-HS_CONF = d["hs"]
-BC_CONF = d["bc"]
-
-
 class VadCondition(nn.Module):
-    def __init__(self, dim, vad_history=False, vad_history_bins=5) -> None:
+    def __init__(self, dim, va_history=False, va_history_bins=5) -> None:
         super().__init__()
         self.dim = dim
 
         # Vad Condition
         # vad: 2 one-hot encodings
         # self.vad_condition = nn.Embedding(num_embeddings=2, embedding_dim=dim)
-        self.vad_condition = nn.Linear(2, dim)
+        self.va_condition = nn.Linear(2, dim)
 
-        if vad_history:
-            self.vad_history = nn.Linear(vad_history_bins, dim)
+        if va_history:
+            self.va_history = nn.Linear(va_history_bins, dim)
 
         self.ln = nn.LayerNorm(dim)
         # self.init()
 
     def init(self):
         # init orthogonal vad vectors
-        nn.init.orthogonal_(self.vad_condition.weight.data)
+        nn.init.orthogonal_(self.va_condition.weight.data)
 
-    def forward(self, vad, vad_history=None):
-        v_cond = self.vad_condition(vad)
+    def forward(self, vad, va_history=None):
+        v_cond = self.va_condition(vad)
 
         # Add vad-history information
-        if vad_history is not None:
-            v_cond += self.vad_history(vad_history)
+        if va_history is not None:
+            v_cond += self.va_history(va_history)
 
         return self.ln(v_cond)
 
@@ -82,13 +76,13 @@ class ProjectionModel(nn.Module):
         self.conf = conf
 
         # Audio Encoder
-        self.encoder = Encoder(conf)
+        self.encoder = Encoder(conf["encoder"])
 
         # VAD Conditioning
         self.vad_condition = VadCondition(
             self.encoder.output_dim,
-            vad_history=conf["vad_cond"]["vad_history"],
-            vad_history_bins=conf["vad_cond"]["vad_history_bins"],
+            va_history=conf["va_cond"]["history"],
+            va_history_bins=conf["va_cond"]["history_bins"],
         )
 
         # Autoregressive
@@ -108,23 +102,11 @@ class ProjectionModel(nn.Module):
         )
 
         # Appropriate VAP-head
-        self.vap_type = "discrete"
-        if conf["vad_projection"]["regression"]:
-            if conf["vad_projection"]["comparative"]:
-                self.vap_type = "comparative"
-            else:
-                self.vap_type = "independent"
-
-        n_bins = len(conf["vad_projection"]["bin_times"])
+        self.vap_type = conf["vap"]["type"]
+        n_bins = len(conf["vap"]["bin_times"])
         self.vap_head = VAPHead(
             input_dim=conf["ar"]["dim"], n_bins=n_bins, type=self.vap_type
         )
-
-    @staticmethod
-    def load_config(path=None, args=None, format="dict"):
-        if path is None:
-            path = repo_root() + "/conv_ssl/config/model.yaml"
-        return load_config(path, args=args, format=format)
 
     def loss_vad_projection(self, logits, labels, reduction="mean"):
         # CrossEntropyLoss over discrete labels
@@ -165,20 +147,20 @@ class ProjectionModel(nn.Module):
 class VPModel(pl.LightningModule):
     def __init__(self, conf) -> None:
         super().__init__()
-        self.net = ProjectionModel(conf)  # x, vf, vh -> logits
-        self.vap_type = self.net.vap_type
-
-        self.VAP = VAP(
-            type=self.vap_type,
-            bin_times=conf["vad_projection"]["bin_times"],
-            frame_hz=self.net.encoder.frame_hz,
-            pre_frames=conf["vad_projection"]["regression_pre_frames"],
-            threshold_ratio=conf["vad_projection"]["vad_threshold"],
-        )  # logits -> zero-shot probs etc
-
-        # conf
-        # self.frame_hz = self.net.encoder.frame_hz
         self.conf = conf
+
+        # Network
+        self.net = ProjectionModel(conf["model"])  # x, vf, vh -> logits
+        self.vap_type = conf["model"]["vap"]["type"]
+
+        # VAP: labels, logits -> zero-shot probs
+        self.VAP = VAP(
+            type=conf["model"]["vap"]["type"],
+            bin_times=conf["model"]["vap"]["bin_times"],
+            frame_hz=self.net.encoder.frame_hz,
+            pre_frames=conf["model"]["vap"]["pre_frames"],
+            threshold_ratio=conf["model"]["vap"]["bin_threshold"],
+        )
 
         # Metrics
         self.val_metric = None  # self.init_metric(conf, frame_hz=self.frame_hz)
@@ -197,19 +179,30 @@ class VPModel(pl.LightningModule):
 
     def init_metric(
         self,
-        conf,
-        frame_hz,
-        threshold_pred_shift=0.5,
-        threshold_short_long=0.5,
-        threshold_bc_pred=0.1,
+        conf=None,
+        threshold_pred_shift=None,
+        threshold_short_long=None,
+        threshold_bc_pred=None,
         bc_pred_pr_curve=False,
         shift_pred_pr_curve=False,
         long_short_pr_curve=False,
     ):
+        if conf is None:
+            conf = self.conf
+
+        if threshold_pred_shift is None:
+            threshold_pred_shift = conf["events"]["threshold"]["S_pred"]
+
+        if threshold_bc_pred is None:
+            threshold_bc_pred = conf["events"]["threshold"]["BC_pred"]
+
+        if threshold_short_long is None:
+            threshold_short_long = conf["events"]["threshold"]["SL"]
+
         metric = TurnTakingMetrics(
-            hs_kwargs=HS_CONF,
-            bc_kwargs=BC_CONF,
-            metric_kwargs=METRIC_CONF,
+            hs_kwargs=conf["events"]["SH"],
+            bc_kwargs=conf["events"]["BC"],
+            metric_kwargs=conf["events"]["metric"],
             threshold_pred_shift=threshold_pred_shift,
             threshold_short_long=threshold_short_long,
             threshold_bc_pred=threshold_bc_pred,
@@ -221,20 +214,16 @@ class VPModel(pl.LightningModule):
         metric = metric.to(self.device)
         return metric
 
-    @staticmethod
-    def load_config(path=None, args=None, format="dict"):
-        return ProjectionModel.load_config(path, args, format)
-
     @property
     def run_name(self):
-        # Name the run e.g. hubert_44_41
-        name = self.conf["encoder"]["type"].replace("_base", "")
-        name += f"_{self.conf['ar']['num_layers']}{self.conf['ar']['num_heads']}"
-        if self.conf["vad_projection"]["regression"]:
-            if self.conf["vad_projection"]["comparative"]:
+        conf = self.conf["model"]
+        name = conf["encoder"]["name"]
+        name += f"_{conf['ar']['num_layers']}{conf['ar']['num_heads']}"
+        if self.vap_type != "discrete":
+            if self.vap_type == "comparative":
                 name += "_comp"
             else:
-                n_bins = len(self.conf["vad_projection"]["bin_times"])
+                n_bins = len(self.conf["vap"]["bin_times"])
                 name += f"_ind_{n_bins}"
         return name
 
@@ -247,9 +236,9 @@ class VPModel(pl.LightningModule):
     def configure_optimizers(self):
         return torch.optim.AdamW(
             self.parameters(),
-            lr=self.learning_rate,
-            betas=self.betas,
-            weight_decay=self.weight_decay,
+            lr=self.conf["optimizer"]["learning_rate"],
+            betas=self.conf["optimizer"]["betas"],
+            weight_decay=self.conf["optimizer"]["weight_decay"],
         )
 
     def forward(self, *args, **kwargs):
@@ -329,9 +318,6 @@ class VPModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, **kwargs):
         """validation step"""
-        if self.val_metric is None:
-            self.val_metric = self.init_metric(self.conf, self.frame_hz)
-            self.val_metric.to(self.device)
 
         # extract events for metrics (use full vad including horizon)
         events = self.val_metric.extract_events(va=batch["vad"], max_frame=1000)
@@ -352,10 +338,18 @@ class VPModel(pl.LightningModule):
         )
 
     def on_test_epoch_start(self):
+        if self.test_metric is None:
+            self.test_metric = self.init_metric()
+            self.test_metric.to(self.device)
+
         if self.test_metric is not None:
             self.test_metric.reset()
 
     def on_validation_epoch_start(self):
+        if self.val_metric is None:
+            self.val_metric = self.init_metric()
+            self.val_metric.to(self.device)
+
         if self.val_metric is not None:
             self.val_metric.reset()
 
@@ -373,9 +367,6 @@ class VPModel(pl.LightningModule):
                 self.log(f"val_{metric_name}", values)
 
     def test_step(self, batch, batch_idx, **kwargs):
-        if self.test_metric is None:
-            self.test_metric = self.init_metric(self.conf, self.frame_hz)
-            self.test_metric.to(self.device)
 
         # extract events for metrics (use full vad including horizon)
         events = self.test_metric.extract_events(va=batch["vad"], max_frame=1000)
@@ -410,68 +401,3 @@ class VPModel(pl.LightningModule):
                     self.log(f"test/{metric_name}", values)
         except Exception as e:
             print("TEST_EPOCH_END FAILED.", e)
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        """argparse arguments for SoSIModel (based on yaml-config)"""
-        parser = parent_parser.add_argument_group("VPModel")
-        parser.add_argument("--conf", default=None, type=str)
-        parser.add_argument("--dont_log_model", action="store_true")
-
-        # A workaround for OmegaConf + WandB-Sweeps
-        default_conf = VPModel.load_config(format=None)
-        parser = OmegaConfArgs.add_argparse_args(parser, default_conf)
-        return parent_parser
-
-
-if __name__ == "__main__":
-    from datasets_turntaking import DialogAudioDM
-    from conv_ssl.evaluation.utils import get_checkpoint
-    from conv_ssl.utils import to_device
-
-    data_conf = DialogAudioDM.load_config()
-    DialogAudioDM.print_dm(data_conf)
-
-    dm = DialogAudioDM(
-        datasets=data_conf["dataset"]["datasets"],
-        type=data_conf["dataset"]["type"],
-        sample_rate=data_conf["dataset"]["sample_rate"],
-        audio_duration=data_conf["dataset"]["audio_duration"],
-        audio_normalize=data_conf["dataset"]["audio_normalize"],
-        audio_overlap=data_conf["dataset"]["audio_overlap"],
-        audio_context_duration=data_conf["dataset"]["audio_context_duration"],
-        ipu_min_time=data_conf["dataset"]["ipu_min_time"],
-        ipu_pause_time=data_conf["dataset"]["ipu_pause_time"],
-        vad_hz=100,
-        vad_horizon=2,
-        vad_history=data_conf["dataset"]["vad_history"],
-        vad_history_times=data_conf["dataset"]["vad_history_times"],
-        batch_size=4,
-        num_workers=0,
-    )
-    dm.prepare_data()
-    dm.setup()
-
-    ################################################
-    # Test new
-    ################################################
-    conf = VPModel.load_config()
-    model = VPModel(conf)
-    for batch in dm.train_dataloader():
-        loss, out, batch = model.shared_step(to_device(batch, model.device))
-        print("Loss: ", loss["total"])
-        break
-
-    ################################################
-    # Load old
-    ################################################
-    run_path = "120k8fdv"
-    checkpoint_path = get_checkpoint(run_path=run_path)
-    checkpoint_path = load_paper_versions(checkpoint_path)
-    model = VPModel.load_from_checkpoint(checkpoint_path, strict=False)
-    if torch.cuda.is_available():
-        model = model.to("cuda")
-    model = model.eval()
-    for batch in dm.train_dataloader():
-        loss, out, batch = model.shared_step(to_device(batch, model.device))
-        print("Loss: ", loss["total"])
