@@ -4,10 +4,8 @@ from os.path import join
 import torch
 from tqdm import tqdm
 from conv_ssl.model import VPModel
-from conv_ssl.utils import everything_deterministic, to_device  # , write_json
-from conv_ssl.evaluation.utils import get_checkpoint, load_paper_versions
+from conv_ssl.utils import everything_deterministic
 
-from datasets_turntaking.dialog_audio import dataset
 from datasets_turntaking import DialogAudioDM
 
 everything_deterministic()
@@ -80,10 +78,18 @@ def video_data_single(
 
 
 if __name__ == "__main__":
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_argument("--checkpoint", type=str)
+    parser.add_argument("--savepath", type=str)
+    parser.add_argument("--n", type=int, default=3, help="Number of videos")
+    parser.add_argument("--session", type=str, default=None, help="Specific session")
+
+    args = parser.parse_args()
 
     # Load model
-    checkpoint_path = "assets/model.ckpt"
-    model = VPModel.load_from_checkpoint(checkpoint_path, strict=False)
+    model = VPModel.load_from_checkpoint(args.checkpoint, strict=False)
     model = model.eval()
     if torch.cuda.is_available():
         model = model.to("cuda")
@@ -110,8 +116,14 @@ if __name__ == "__main__":
     dm.prepare_data()
     dm.setup(None)
 
-    # select 20 first test-videos
-    for idx in range(20):
+    if args.session is not None:
+        idx = dm.test_dset.dataset["session"].index(args.session)
         video_data = video_data_single(
-            model, dset=dm.test_dset, idx=idx, savepath="assets/video/test"
+            model, dset=dm.test_dset, idx=idx, savepath=args.savepath
         )
+    else:
+        # select 20 first test-videos
+        for idx in range(args.n):
+            video_data = video_data_single(
+                model, dset=dm.test_dset, idx=idx, savepath=args.savepath
+            )
