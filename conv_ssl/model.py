@@ -316,6 +316,22 @@ class VPModel(pl.LightningModule):
 
         return {"loss": loss["total"]}
 
+    def on_test_epoch_start(self):
+        if self.test_metric is None:
+            self.test_metric = self.init_metric()
+            self.test_metric.to(self.device)
+
+        if self.test_metric is not None:
+            self.test_metric.reset()
+
+    def on_validation_epoch_start(self):
+        if self.val_metric is None:
+            self.val_metric = self.init_metric()
+            self.val_metric.to(self.device)
+
+        if self.val_metric is not None:
+            self.val_metric.reset()
+
     def validation_step(self, batch, batch_idx, **kwargs):
         """validation step"""
 
@@ -337,38 +353,7 @@ class VPModel(pl.LightningModule):
             events=events,
         )
 
-    def on_test_epoch_start(self):
-        if self.test_metric is None:
-            self.test_metric = self.init_metric()
-            self.test_metric.to(self.device)
-
-        if self.test_metric is not None:
-            self.test_metric.reset()
-
-    def on_validation_epoch_start(self):
-        if self.val_metric is None:
-            self.val_metric = self.init_metric()
-            self.val_metric.to(self.device)
-
-        if self.val_metric is not None:
-            self.val_metric.reset()
-
-    def validation_epoch_end(self, outputs) -> None:
-        r = self.val_metric.compute()
-        for metric_name, values in r.items():
-            if metric_name.startswith("pr_curve"):
-                continue
-            if isinstance(values, dict):
-                for val_name, val in values.items():
-                    if val_name in ["tp", "tn", "fp", "fn"]:
-                        continue
-                    self.log(f"val_{metric_name}_{val_name}", val)
-            else:
-                self.log(f"val_{metric_name}", values)
-
     def test_step(self, batch, batch_idx, **kwargs):
-
-        # extract events for metrics (use full vad including horizon)
         events = self.test_metric.extract_events(va=batch["vad"], max_frame=1000)
 
         # Regular forward pass
@@ -386,18 +371,23 @@ class VPModel(pl.LightningModule):
             events=events,
         )
 
+    def _log(self, result, split="val"):
+        for metric_name, values in result.items():
+            if metric_name.startswith("pr_curve"):
+                continue
+            if "support" in metric_name:
+                continue
+
+            if isinstance(values, dict):
+                for val_name, val in values.items():
+                    self.log(f"{split}_{metric_name}_{val_name}", val.float())
+            else:
+                self.log(f"{split}_{metric_name}", values.float())
+
+    def validation_epoch_end(self, outputs) -> None:
+        r = self.val_metric.compute()
+        self._log(r, split="val")
+
     def test_epoch_end(self, outputs) -> None:
         r = self.test_metric.compute()
-        try:
-            for metric_name, values in r.items():
-                if metric_name.startswith("pr_curve"):
-                    continue
-                if isinstance(values, dict):
-                    for val_name, val in values.items():
-                        if val_name in ["tp", "tn", "fp", "fn"]:
-                            continue
-                        self.log(f"test/{metric_name}_{val_name}", val)
-                else:
-                    self.log(f"test/{metric_name}", values)
-        except Exception as e:
-            print("TEST_EPOCH_END FAILED.", e)
+        self._log(r, split="test")
