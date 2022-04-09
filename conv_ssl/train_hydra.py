@@ -43,6 +43,13 @@ def train(cfg: DictConfig) -> None:
     local_rank = environ.get("LOCAL_RANK", 0)
 
     model = VPModel(cfg_dict)
+
+    if cfg_dict["verbose"]:
+        print("DataModule")
+        for k, v in cfg_dict["data"].items():
+            print(f"{k}: {v}")
+        print("#" * 60)
+
     dm = DialogAudioDM(**cfg_dict["data"])
     dm.prepare_data()
 

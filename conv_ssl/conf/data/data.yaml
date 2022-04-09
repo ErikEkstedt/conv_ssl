@@ -14,5 +14,5 @@ vad_history_times: [60, 30, 10, 5]
 train_files: null
 val_files: null
 test_files: null
-batch_size: 4
-num_workers: 4
+batch_size: 16
+num_workers: 24

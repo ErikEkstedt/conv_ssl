@@ -4,11 +4,13 @@ defaults:
   - trainer: trainer
   - data: data
 
+seed: 1
+verbose: false
+
 wandb:
   project: 'VAP'
   dont_log_model: true
 
-seed: 1
 
 optimizer:
   alpha: 0.6
