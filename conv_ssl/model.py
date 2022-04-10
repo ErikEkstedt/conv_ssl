@@ -163,7 +163,7 @@ class VPModel(pl.LightningModule):
         )
 
         # Metrics
-        self.val_metric = None  # self.init_metric(conf, frame_hz=self.frame_hz)
+        self.val_metric = None  # self.init_metric()
         self.test_metric = None  # set in test if necessary
 
         # Training params
@@ -320,16 +320,14 @@ class VPModel(pl.LightningModule):
         if self.test_metric is None:
             self.test_metric = self.init_metric()
             self.test_metric.to(self.device)
-
-        if self.test_metric is not None:
+        else:
             self.test_metric.reset()
 
     def on_validation_epoch_start(self):
         if self.val_metric is None:
             self.val_metric = self.init_metric()
             self.val_metric.to(self.device)
-
-        if self.val_metric is not None:
+        else:
             self.val_metric.reset()
 
     def validation_step(self, batch, batch_idx, **kwargs):
