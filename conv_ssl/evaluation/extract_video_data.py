@@ -1,10 +1,7 @@
 import torch
 from tqdm import tqdm
 from conv_ssl.model import VPModel
-from conv_ssl.utils import everything_deterministic, to_device  # , write_json
-from conv_ssl.evaluation.utils import get_checkpoint, load_paper_versions
-
-from datasets_turntaking.dialog_audio import dataset
+from conv_ssl.utils import everything_deterministic
 from datasets_turntaking import DialogAudioDM
 
 everything_deterministic()
