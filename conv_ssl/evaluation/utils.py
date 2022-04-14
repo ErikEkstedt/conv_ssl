@@ -111,7 +111,7 @@ def load_dm(
 
 
 # Temporary
-def load_paper_versions(checkpoint_path):
+def load_paper_versions(checkpoint_path, savepath=None):
     """
     The code was reformatted and simplified and so some paramter names were changed.
 
@@ -126,7 +126,6 @@ def load_paper_versions(checkpoint_path):
 
     dir = dirname(checkpoint_path)
     name = basename(checkpoint_path)
-    new_name = name.replace(".ckpt", "_new.ckpt")
 
     chpt = torch.load(checkpoint_path)
     sd = chpt["state_dict"]
@@ -141,6 +140,8 @@ def load_paper_versions(checkpoint_path):
             param = from_to[param]
         new_sd[param] = weight
     chpt["state_dict"] = new_sd
-    new_path = join(dir, new_name)
-    torch.save(chpt, new_path)
-    return new_path
+    if savepath is None:
+        new_name = name.replace(".ckpt", "_new.ckpt")
+        savepath = join(dir, new_name)
+    torch.save(chpt, savepath)
+    return savepath
