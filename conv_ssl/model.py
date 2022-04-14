@@ -290,13 +290,16 @@ class VPModel(pl.LightningModule):
             va_labels=va_labels,
             reduction=reduction,
         )
-
-        loss = {"vp": loss.mean(), "total": loss.mean()}
-        return loss, out, batch
+        out_loss = {"vp": loss.mean(), "total": loss.mean()}
+        if reduction == "none":
+            out_loss["frames"] = loss
+        return out_loss, out, batch
 
     @torch.no_grad()
-    def output(self, batch, out_device="cpu"):
-        loss, out, batch = self.shared_step(to_device(batch, self.device))
+    def output(self, batch, reduction="none", out_device="cpu"):
+        loss, out, batch = self.shared_step(
+            to_device(batch, self.device), reduction=reduction
+        )
         probs = self.VAP(logits=out["logits_vp"], va=batch["vad"])
         batch = to_device(batch, out_device)
         out = to_device(out, out_device)

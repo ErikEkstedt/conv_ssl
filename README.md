@@ -21,18 +21,45 @@ Model training for the paper [Voice Activity Projection: Self-supervised Learnin
     - clone repo `git clone https://github.com/ErikEkstedt/datasets_turntaking.git`
     - cd to repo, and install dependencies: `pip install -r requirements.txt`
     - install repo: `pip install -e .`
+* Pretrained Encoders
+ * The pretrained encoder checkpoint is downloaded from the original repo (or from torch.hub through torchaudio).
+  * [CPC](https://github.com/facebookresearch/CPC_audio)
+    - requires installation of source
+    - that is clone [CPC_audio](https://github.com/facebookresearch/CPC_audio)
+      - cd to repo
+      - Install dependencies (see repository) but probably you'll need
+        - `pip install cython`
+      - run: `python setup.py develop`  (again see original implementation)
+    - **automatically** downloads checkpoints
 
-## Pretrained Encoders
-The pretrained encoder checkpoint is downloaded from the original repo (or from torch.hub through torchaudio).
+### Train
 
-* [CPC](https://github.com/facebookresearch/CPC_audio)
-  - requires installation of source
-  - that is clone [CPC_audio](https://github.com/facebookresearch/CPC_audio)
-    - cd to repo
-    - Install dependencies (see repository) but probably you'll need
-      - `pip install cython`
-    - run: `python setup.py develop`  (again see original implementation)
-  - **automatically** downloads checkpoints
+```bash
+python conv_ssl/train_hydra.py data.datasets=['switchboard','fisher'] +trainer.val_check_interval=0.5 early_stopping.patience=20
+```
+
+### Evaluate
+
+```bash
+python conv_ssl/evaluation/evaluation.py \
+  +checkpoint_path=/full/path/checkpoint.ckpt \
+  +savepath=assets/vap_fis \
+  data.num_workers=4 \
+  data.batch_size=16 
+```
+
+### Paper
+
+We ran model using kfold splits (see `conv_ssl/config/swb_kfolds`) over 4 different model architectures ('discrete', 'independent', 'independent-40', 'comparative').
+
+* Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
+* train on samples on disk: `conv_ssl/train_disk.py` 
+* run `scripts/model_kfold.bash`
+* We evaluate (find threshold over validation set + final evaluation on test-set)
+  - see `conv_ssl/evaluation/evaluate_paper_model.py`
+  - the ids are the `WandB` ids.
+  - We save all model scores to disk
+* In `conv_ssl/evaluation/anova.py` we compare the scores to extract the final values in the paper.
 
 ## Docker
 * Requires [Nvidia-Docker]() for gpu support.
@@ -110,53 +137,6 @@ metric_kwargs = event_settings['metric']
   }
 }
 ```
-
-### Train
-
-* Discrete
-    ```bash
-    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model.yaml
-    ```
-* Independent: similar to [Towards a General, Continuous Model of Turn-taking in Spoken Dialogue using LSTM Recurrent Neural Networks, Skantze](https://aclanthology.org/W17-5527/)
-  - Bins like 'discrete'.
-      ```bash
-      python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent.yaml
-      ```
-  - Independent-40: with similar bin count.
-      ```bash
-      python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent_baseline.yaml
-      ```
-* Comparative:
-    ```bash
-    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/comparative.yaml
-    ```
-* For faster training we saved all samples to disk and load directly
-  - Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
-  - train on samples on disk: `conv_ssl/train_disk.py` 
-  - SCRIPTS `conv_ssl/scripts`. Please look in script to get an idea of what they're doing...
-    - `scripts/model_kfold.bash` for kfold training in paper
-    - `scripts/test_models_script.bash` testing model training (`--fast_dev_run 1`)
-    - `scripts/train_script.bash` testing model training (`--fast_dev_run 1`)
-
-
-### Evaluate
-
-```bash
-python conv_ssl/evaluation/evaluation.py --checkpoint $PATH_TO_CHPT --savepath $PATH_TO_SAVEDIR --batch_size 4
-```
-
-### Paper
-
-We ran model using kfold splits (see `conv_ssl/config/swb_kfolds`) over 4 different model architectures ('discrete', 'independent', 'independent-40', 'comparative').
-
-* Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
-* train on samples on disk: `conv_ssl/train_disk.py` 
-* run `scripts/model_kfold.bash`
-* We evaluate (find threshold over validation set + final evaluation on test-set)
-  - see `conv_ssl/evaluation/evaluate_paper_model.py`
-  - the ids are the `WandB` ids.
-  - We save all model scores to disk
-* In `conv_ssl/evaluation/anova.py` we compare the scores to extract the final values in the paper.
 
 
 ## Citation

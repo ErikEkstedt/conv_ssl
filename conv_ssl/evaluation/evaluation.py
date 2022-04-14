@@ -1,5 +1,7 @@
 from os.path import join
-from os import makedirs, cpu_count
+from os import makedirs
+from omegaconf import DictConfig, OmegaConf
+import hydra
 
 import torch
 from pytorch_lightning import Trainer, Callback
@@ -7,17 +9,19 @@ from pytorch_lightning.loggers import WandbLogger
 
 from conv_ssl.model import VPModel
 from conv_ssl.utils import everything_deterministic, write_json, read_json
-
 from datasets_turntaking import DialogAudioDM
-from vap_turn_taking import TurnTakingMetrics
 
-d = read_json("conv_ssl/config/event_settings.json")
-METRIC_CONF = d["metric"]
-HS_CONF = d["hs"]
-BC_CONF = d["bc"]
 MIN_THRESH = 0.01  # minimum threshold limit for S/L, S-pred, BC-pred
 
 everything_deterministic()
+
+"""
+python conv_ssl/evaluation/evaluation.py \
+        data.num_workers=4 \
+        data.batch_size=16 \
+        +checkpoint_path=/FULL/PATH/TO/CHECKPOINT/checkpoint.ckpt \
+        +savepath=evaluation/the_model # relative hydra job-dir
+"""
 
 
 def tensor_dict_to_json(d):
@@ -193,16 +197,11 @@ def find_threshold(model, dloader, min_thresh=0.01):
         return ts[best_idx]
 
     # Init metric:
-    model.test_metric = TurnTakingMetrics(
-        hs_kwargs=HS_CONF,
-        bc_kwargs=BC_CONF,
-        metric_kwargs=METRIC_CONF,
+    model.test_metric = model.init_metric(
         bc_pred_pr_curve=True,
         shift_pred_pr_curve=True,
         long_short_pr_curve=True,
-        frame_hz=model.frame_hz,
     )
-    model.test_metric.to(model.device)
 
     # Find Thresholds
     _ = test(model, dloader, online=False)
@@ -254,34 +253,38 @@ def find_threshold(model, dloader, min_thresh=0.01):
     return thresholds, predictions, curves
 
 
-def evaluate(checkpoint_path, savepath, batch_size, num_workers):
+@hydra.main(config_path="../conf", config_name="config")
+def evaluate(cfg: DictConfig) -> None:
     """Evaluate model"""
+    cfg_dict = OmegaConf.to_object(cfg)
+    cfg_dict = dict(cfg_dict)
+
+    savepath = cfg.get("savepath", None)
+    assert savepath is not None, f"Please provide savepath by `+savepath=/save/path"
 
     # Load model
-    model = VPModel.load_from_checkpoint(checkpoint_path, strict=False)
+    model = VPModel.load_from_checkpoint(cfg.checkpoint_path, strict=False)
     model = model.eval()
     if torch.cuda.is_available():
         model = model.to("cuda")
 
     # Load data
-    data_conf = DialogAudioDM.load_config()
-    DialogAudioDM.print_dm(data_conf)
-    print("Num Workers: ", num_workers)
-    print("Batch size: ", batch_size)
+    print("Num Workers: ", cfg.data.num_workers)
+    print("Batch size: ", cfg.data.batch_size)
     dm = DialogAudioDM(
-        datasets=data_conf["dataset"]["datasets"],
-        type=data_conf["dataset"]["type"],
-        audio_duration=data_conf["dataset"]["audio_duration"],
-        audio_normalize=data_conf["dataset"]["audio_normalize"],
-        audio_overlap=data_conf["dataset"]["audio_overlap"],
-        sample_rate=data_conf["dataset"]["sample_rate"],
+        datasets=cfg.data.datasets,
+        type=cfg.data.type,
+        audio_duration=cfg.data.audio_duration,
+        audio_normalize=cfg.data.audio_normalize,
+        audio_overlap=cfg.data.audio_overlap,
+        sample_rate=cfg.data.sample_rate,
         vad_hz=model.frame_hz,
         vad_horizon=model.VAP.horizon,
-        vad_history=data_conf["dataset"]["vad_history"],
-        vad_history_times=data_conf["dataset"]["vad_history_times"],
+        vad_history=cfg.data.vad_history,
+        vad_history_times=cfg.data.vad_history_times,
         flip_channels=False,
-        batch_size=batch_size,
-        num_workers=num_workers,
+        batch_size=cfg.data.batch_size,
+        num_workers=cfg.data.num_workers,
     )
     dm.prepare_data()
     dm.setup(None)
@@ -289,29 +292,34 @@ def evaluate(checkpoint_path, savepath, batch_size, num_workers):
 
     # Threshold
     # Find the best thresholds (S-pred, BC-pred, S/L) on the validation set
-    print("#" * 60)
-    print("Finding Thresholds (val-set)...")
-    print("#" * 60)
-    thresholds, prediction, curves = find_threshold(
-        model, dm.val_dataloader(), min_thresh=MIN_THRESH
-    )
-    torch.save(prediction, join(savepath, "predictions.pt"))
-    torch.save(curves, join(savepath, "curves.pt"))
+    curves = None
+    predictions = None
+    threshold_path = cfg.get("thresholds", None)
+    if threshold_path is None:
+        print("#" * 60)
+        print("Finding Thresholds (val-set)...")
+        print("#" * 60)
+        thresholds, prediction, curves = find_threshold(
+            model, dm.val_dataloader(), min_thresh=MIN_THRESH
+        )
+
+        th = {k: v.item() for k, v in thresholds.items()}
+        write_json(th, join(savepath, "thresholds.json"))
+        torch.save(prediction, join(savepath, "predictions.pt"))
+        torch.save(curves, join(savepath, "curves.pt"))
+    else:
+        print("Loading thresholds: ", threshold_path)
+        thresholds = read_json(threshold_path)
 
     # Score
     print("#" * 60)
     print("Final Score (test-set)...")
     print("#" * 60)
-    model.test_metric = TurnTakingMetrics(
-        hs_kwargs=HS_CONF,
-        bc_kwargs=BC_CONF,
-        metric_kwargs=METRIC_CONF,
+    model.test_metric = model.init_metric(
         threshold_pred_shift=thresholds.get("pred_shift", 0.5),
         threshold_short_long=thresholds.get("short_long", 0.5),
         threshold_bc_pred=thresholds.get("pred_bc", 0.5),
-        frame_hz=model.frame_hz,
     )
-    model.test_metric.to(model.device)
     result = test(model, dm.test_dataloader(), online=False)[0]
     metrics = model.test_metric.compute()
 
@@ -327,18 +335,4 @@ def evaluate(checkpoint_path, savepath, batch_size, num_workers):
 
 
 if __name__ == "__main__":
-    from argparse import ArgumentParser
-
-    parser = ArgumentParser()
-    parser.add_argument("--checkpoint", type=str)
-    parser.add_argument("--savepath", type=str, default="assets")
-    parser.add_argument("--batch_size", type=int, default=16)
-    args = parser.parse_args()
-
-    # Saves all scores to `savepath`
-    metrics, prediction, curves = evaluate(
-        args.checkpoint,
-        savepath=args.savepath,
-        batch_size=args.batch_size,
-        num_workers=cpu_count(),
-    )
+    metrics, prediction, curves = evaluate()
