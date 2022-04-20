@@ -4,6 +4,7 @@ encoder:
   sample_rate: 16000
   name: cpc
   frame_hz: 100
+  freeze: True
 
 va_cond:
   history: true

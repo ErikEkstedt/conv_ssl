@@ -76,7 +76,8 @@ class ProjectionModel(nn.Module):
         self.conf = conf
 
         # Audio Encoder
-        self.encoder = Encoder(conf["encoder"])
+        freeze = conf["encoder"].get("freeze", True)
+        self.encoder = Encoder(conf["encoder"], freeze=freeze)
 
         # VAD Conditioning
         self.vad_condition = VadCondition(
