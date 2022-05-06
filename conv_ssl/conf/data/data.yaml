@@ -1,12 +1,12 @@
 datasets: ["switchboard"]
 type: "sliding"
-sample_rate: 16000
+sample_rate: ${model.encoder.sample_rate}
 audio_mono: true
 audio_duration: 10
 audio_normalize: true
-audio_overlap: 2
+audio_overlap: 1
 # VAD
-vad_hz: 100
+vad_hz: ${model.encoder.frame_hz}
 vad_horizon: 2
 vad_history: true
 vad_history_times: [60, 30, 10, 5]

@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 
-
-from conv_ssl.models.transformer import CausalTransformer
+from conv_ssl.models.transformer import GPT
+from conv_ssl.models.transformer_old import CausalTransformer
 
 
 class AR(nn.Module):
     """Simplified version of original `CPCAR` module"""
 
-    TYPES = ["gru", "sru", "lstm", "transformer"]
+    TYPES = ["gru", "sru", "lstm", "transformer", "gpt"]
 
     def __init__(
         self,
@@ -33,7 +33,7 @@ class AR(nn.Module):
 
     def _ar(self, ar, transfomer_kwargs):
         ar = ar.lower()
-        assert ar in self.TYPES, 'Please choose ["GRU", "LSTM", "transformer"]'
+        assert ar in self.TYPES, 'Please choose ["GRU", "LSTM", "transformer", "gpt"]'
 
         ret = nn.Identity()
         if ar == "gru":
@@ -48,6 +48,7 @@ class AR(nn.Module):
             raise NotADirectoryError("SRU not implemented!")
             # ret = SRU(self.input_dim, self.dim, num_layers=self.num_layers)
 
+        # TODO: input projection if input_dim != dim
         elif ar == "transformer":
             ret = CausalTransformer(
                 dim=self.dim,
@@ -63,13 +64,30 @@ class AR(nn.Module):
                 ret = nn.Sequential(
                     nn.Linear(self.input_dim, self.dim), nn.LayerNorm(self.dim), ret
                 )
-            return ret
+        elif ar == "gpt":
+            ret = GPT(
+                dim=self.dim,
+                dff_k=transfomer_kwargs["dff_k"],
+                num_layers=self.num_layers,
+                num_heads=transfomer_kwargs["num_heads"],
+                activation="GELU",
+                dropout=self.dropout,
+                use_pos_emb=transfomer_kwargs["use_pos_emb"],  # False -> Alibi
+                max_context=transfomer_kwargs["max_context"],
+            )
+
         return ret
 
-    def forward(self, x):
+    def forward(self, x, attention=False):
         ret = {}
         if self.ar_type == "transformer":
             x = self.ar(x)
+            ret["z"] = x
+        elif self.ar_type == "gpt":
+            x = self.ar(x, attention=attention)
+            if attention:
+                x, attn = x
+                ret["attn"] = attn
             ret["z"] = x
         else:
             x, h = self.ar(x)
@@ -83,27 +101,39 @@ class AR(nn.Module):
         return ret
 
 
-if __name__ == "__main__":
+def _test_ar(config_name):
+    from conv_ssl.utils import load_hydra_conf
+    from omegaconf import OmegaConf
 
-    input_dim = 100
-    dim = 256
-    num_layers = 2
-    # model = AR(
-    #     input_dim=dim, dim=dim, num_layers=num_layers, ar="LSTM", keep_hidden=False
-    # )
-    model = AR(
-        input_dim=input_dim,
-        dim=dim,
-        num_layers=num_layers,
-        dropout=0.1,
-        ar="transformer",
-        transfomer_kwargs={"dff_k": 3, "num_heads": 4, "sizeSeq": 1024, "abspos": True},
-        keep_hidden=False,
-    )
-    print(model)
+    conf = load_hydra_conf(config_name=config_name)
+    conf = conf["model"]
+    print(OmegaConf.to_yaml(conf))
     B = 4
     N = 100
-    x = torch.rand((B, N, input_dim))
+    D = 256
+    # Autoregressive
+    model = AR(
+        input_dim=D,
+        dim=conf["ar"]["dim"],
+        num_layers=conf["ar"]["num_layers"],
+        dropout=conf["ar"]["dropout"],
+        ar=conf["ar"]["type"],
+        transfomer_kwargs=dict(
+            num_heads=conf["ar"]["num_heads"],
+            dff_k=conf["ar"]["dff_k"],
+            use_pos_emb=conf["ar"]["use_pos_emb"],
+            max_context=conf["ar"].get("max_context", None),
+            abspos=conf["ar"].get("abspos", None),
+            sizeSeq=conf["ar"].get("sizeSeq", None),
+        ),
+    )
+    # print(model)
+    x = torch.rand((B, N, D))
     print("x: ", x.shape)
     o = model(x)
     print(o["z"].shape)
+
+
+if __name__ == "__main__":
+    _test_ar("model/discrete")
+    _test_ar("model/discrete_20hz")

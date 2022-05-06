@@ -53,10 +53,11 @@ def train(cfg: DictConfig) -> None:
     dm = DialogAudioDM(**cfg_dict["data"])
     dm.prepare_data()
 
-    # Callbacks & Logger
-    logger = None
-    callbacks = []
-    if not cfg_dict["trainer"]["fast_dev_run"]:
+    if cfg_dict["trainer"]["fast_dev_run"]:
+        trainer = pl.Trainer(**cfg_dict["trainer"])
+        trainer.fit(model, datamodule=dm)
+    else:
+        # Callbacks & Logger
         logger = WandbLogger(
             # save_dir=SA,
             project=cfg_dict["wandb"]["project"],
@@ -64,32 +65,29 @@ def train(cfg: DictConfig) -> None:
             log_model=False,
         )
 
-        callbacks.append(
-            ModelCheckpoint(
-                mode=cfg_dict["checkpoint"]["mode"],
-                monitor=cfg_dict["checkpoint"]["monitor"],
-            )
-        )
-        callbacks.append(WandbArtifactCallback())
-
         verbose = False
         if local_rank == 0:
             print(f"Early stopping (patience={cfg_dict['early_stopping']['patience']})")
             verbose = True
 
-        callbacks.append(
+        callbacks = [
+            ModelCheckpoint(
+                mode=cfg_dict["checkpoint"]["mode"],
+                monitor=cfg_dict["checkpoint"]["monitor"],
+            ),
+            WandbArtifactCallback(),
             EarlyStopping(
                 monitor=cfg_dict["early_stopping"]["monitor"],
                 mode=cfg_dict["early_stopping"]["mode"],
                 patience=cfg_dict["early_stopping"]["patience"],
                 strict=True,  # crash if "monitor" is not found in val metrics
                 verbose=verbose,
-            )
-        )
+            ),
+        ]
 
-    # Trainer
-    trainer = pl.Trainer(**cfg_dict["trainer"], logger=logger, callbacks=callbacks)
-    trainer.fit(model, datamodule=dm)
+        # Trainer
+        trainer = pl.Trainer(**cfg_dict["trainer"], logger=logger, callbacks=callbacks)
+        trainer.fit(model, datamodule=dm)
 
 
 def load():

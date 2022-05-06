@@ -271,6 +271,8 @@ def evaluate(cfg: DictConfig) -> None:
     # Load data
     print("Num Workers: ", cfg.data.num_workers)
     print("Batch size: ", cfg.data.batch_size)
+    print(cfg.data.datasets)
+    input()
     dm = DialogAudioDM(
         datasets=cfg.data.datasets,
         type=cfg.data.type,

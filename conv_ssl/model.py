@@ -97,8 +97,9 @@ class ProjectionModel(nn.Module):
                 num_heads=conf["ar"]["num_heads"],
                 dff_k=conf["ar"]["dff_k"],
                 use_pos_emb=conf["ar"]["use_pos_emb"],
-                abspos=conf["ar"]["abspos"],
-                sizeSeq=conf["ar"]["sizeSeq"],
+                max_context=conf["ar"].get("max_context", None),
+                abspos=conf["ar"].get("abspos", None),
+                sizeSeq=conf["ar"].get("sizeSeq", None),
             ),
         )
 
@@ -311,13 +312,7 @@ class VPModel(pl.LightningModule):
     def training_step(self, batch, batch_idx, **kwargs):
         loss, _, _ = self.shared_step(batch)
         batch_size = batch["vad"].shape[0]
-
         self.log("loss", loss["total"], batch_size=batch_size)
-        self.log("loss_vp", loss["vp"], batch_size=batch_size)
-
-        if "loss_ar" in loss:
-            self.log("loss_ar", loss["ar"], batch_size=batch_size)
-
         return {"loss": loss["total"]}
 
     def on_test_epoch_start(self):
@@ -334,11 +329,18 @@ class VPModel(pl.LightningModule):
         else:
             self.val_metric.reset()
 
+    def get_event_max_frames(self, batch):
+        total_frames = batch["vad"].shape[1]
+        return total_frames - self.VAP.horizon_frames
+
     def validation_step(self, batch, batch_idx, **kwargs):
         """validation step"""
 
         # extract events for metrics (use full vad including horizon)
-        events = self.val_metric.extract_events(va=batch["vad"], max_frame=1000)
+        max_event_frame = self.get_event_max_frames(batch)
+        events = self.val_metric.extract_events(
+            va=batch["vad"], max_frame=max_event_frame
+        )
 
         # Regular forward pass
         loss, out, batch = self.shared_step(batch)
@@ -356,7 +358,11 @@ class VPModel(pl.LightningModule):
         )
 
     def test_step(self, batch, batch_idx, **kwargs):
-        events = self.test_metric.extract_events(va=batch["vad"], max_frame=1000)
+
+        max_event_frame = self.get_event_max_frames(batch)
+        events = self.test_metric.extract_events(
+            va=batch["vad"], max_frame=max_event_frame
+        )
 
         # Regular forward pass
         loss, out, batch = self.shared_step(batch)

@@ -2,6 +2,7 @@ from omegaconf import OmegaConf
 from os.path import dirname
 import torch
 from torch.nn.utils.rnn import pad_sequence
+from hydra import compose, initialize
 import json
 
 
@@ -219,6 +220,17 @@ def load_config(path=None, args=None, format="dict"):
     if format == "dict":
         conf = OmegaConf.to_object(conf)
     return conf
+
+
+def load_hydra_conf(config_path="conf", config_name="config"):
+    """https://stackoverflow.com/a/61169706"""
+    try:
+        initialize(config_path=config_path)
+    except:
+        pass
+
+    cfg = compose(config_name=config_name)
+    return cfg
 
 
 class OmegaConfArgs:
