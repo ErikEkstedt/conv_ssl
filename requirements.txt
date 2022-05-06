@@ -19,5 +19,9 @@ git+https://github.com/facebookresearch/CPC_audio.git
 
 
 # Our Dependencies
-git+https://github.com/ErikEkstedt/vap_turn_taking.git
+# must download and install via 
+# 'pip install -r requirements.txt'
+# 'pip install -e .'
+# in the respective repos
+# git+https://github.com/ErikEkstedt/vap_turn_taking.git
 # git+https://github.com/ErikEkstedt/datasets_turntaking.git
