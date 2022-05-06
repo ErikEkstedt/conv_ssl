@@ -383,11 +383,14 @@ class VPModel(pl.LightningModule):
         for metric_name, values in result.items():
             if metric_name.startswith("pr_curve"):
                 continue
-            if "support" in metric_name:
+
+            if metric_name.endswith("support"):
                 continue
 
             if isinstance(values, dict):
                 for val_name, val in values.items():
+                    if val_name == "support":
+                        continue
                     self.log(f"{split}_{metric_name}_{val_name}", val.float())
             else:
                 self.log(f"{split}_{metric_name}", values.float())
@@ -399,3 +402,16 @@ class VPModel(pl.LightningModule):
     def test_epoch_end(self, outputs) -> None:
         r = self.test_metric.compute()
         self._log(r, split="test")
+
+
+def _test_model():
+    from conv_ssl.utils import load_hydra_conf
+
+    conf = load_hydra_conf()
+    model = VPModel(conf)
+    model.val_metric = model.init_metric()
+    ss = model.val_metric.hs.stat_scores
+
+
+if __name__ == "__main__":
+    _test_model()
