@@ -4,9 +4,15 @@ import hydra
 import wandb
 
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import (
+    ModelCheckpoint,
+    EarlyStopping,
+    LearningRateMonitor,
+    StochasticWeightAveraging,
+)
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-
+from pytorch_lightning.strategies import DDPStrategy
+from conv_ssl.callbacks import WandbArtifactCallback
 from conv_ssl.model import VPModel
 from conv_ssl.utils import everything_deterministic
 from datasets_turntaking import DialogAudioDM
@@ -15,30 +21,15 @@ from datasets_turntaking import DialogAudioDM
 everything_deterministic()
 
 
-class WandbArtifactCallback(pl.Callback):
-    def upload(self, trainer):
-        run = trainer.logger.experiment
-        print(f"Ending run: {run.id}")
-        artifact = wandb.Artifact(f"{run.id}_model", type="model")
-        for path, val_loss in trainer.checkpoint_callback.best_k_models.items():
-            print(f"Adding artifact: {path}")
-            artifact.add_file(path)
-        run.log_artifact(artifact)
-
-    def on_train_end(self, trainer, pl_module):
-        print("Training End ---------------- Custom Upload")
-        self.upload(trainer)
-
-    def on_exception(self, trainer, pl_module, exception):
-        if isinstance(exception, KeyboardInterrupt):
-            print("Keyboard Interruption ------- Custom Upload")
-            self.upload(trainer)
-
-
 @hydra.main(config_path="conf", config_name="config")
 def train(cfg: DictConfig) -> None:
     cfg_dict = OmegaConf.to_object(cfg)
     cfg_dict = dict(cfg_dict)
+
+    if "debug" in cfg_dict:
+        environ["WANDB_MODE"] = "offline"
+        print("DEBUG -> OFFLINE MODE")
+
     pl.seed_everything(cfg_dict["seed"])
     local_rank = environ.get("LOCAL_RANK", 0)
 
@@ -65,10 +56,10 @@ def train(cfg: DictConfig) -> None:
             log_model=False,
         )
 
-        verbose = False
         if local_rank == 0:
+            print("#" * 40)
             print(f"Early stopping (patience={cfg_dict['early_stopping']['patience']})")
-            verbose = True
+            print("#" * 40)
 
         callbacks = [
             ModelCheckpoint(
@@ -81,12 +72,36 @@ def train(cfg: DictConfig) -> None:
                 mode=cfg_dict["early_stopping"]["mode"],
                 patience=cfg_dict["early_stopping"]["patience"],
                 strict=True,  # crash if "monitor" is not found in val metrics
-                verbose=verbose,
+                verbose=False,
             ),
+            LearningRateMonitor(),
         ]
 
-        # Trainer
-        trainer = pl.Trainer(**cfg_dict["trainer"], logger=logger, callbacks=callbacks)
+        if cfg_dict["optimizer"].get("swa_enable", False):
+            callbacks.append(
+                StochasticWeightAveraging(
+                    swa_epoch_start=cfg_dict["optimizer"].get("swa_epoch_start", 5),
+                    annealing_epochs=cfg_dict["optimizer"].get(
+                        "swa_annealing_epochs", 10
+                    ),
+                )
+            )
+
+        # Find Best Learning Rate
+        trainer = pl.Trainer(gpus=-1)
+        lr_finder = trainer.tuner.lr_find(model, dm)
+        model.learning_rate = lr_finder.suggestion()
+        print("#" * 40)
+        print("Initial Learning Rate: ", model.learning_rate)
+        print("#" * 40)
+
+        # Actual Training
+        trainer = pl.Trainer(
+            logger=logger,
+            callbacks=callbacks,
+            strategy=DDPStrategy(find_unused_parameters=False),
+            **cfg_dict["trainer"],
+        )
         trainer.fit(model, datamodule=dm)
 
 

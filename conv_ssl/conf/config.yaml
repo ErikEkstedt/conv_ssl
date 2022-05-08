@@ -1,8 +1,6 @@
 defaults:
   - model: discrete
   - events: events
-  - trainer: trainer
-  - data: data
 
 seed: 1
 verbose: false
@@ -16,15 +14,48 @@ optimizer:
   learning_rate: 3.63e-4
   betas: [0.9, 0.999]
   weight_decay: 0.001
+  lr_scheduler_interval: "step"
+  lr_scheduler_freq: 1000
+  lr_scheduler_tmax: 100000
+  swa_enable: false
+  swa_epoch_start: 5
+  swa_annealing_epochs: 10
+  train_encoder_epoch: -1
 
 early_stopping:
-  patience: 3
+  patience: 10
   monitor: 'val_loss'
   mode: 'min'
 
 checkpoint:
   monitor: 'val_loss'
   mode: 'min'
+
+trainer:
+  gpus: -1
+  fast_dev_run: 0
+  deterministic: true
+  max_epochs: 30
+
+data:
+  datasets: ["switchboard", "fisher"]
+  type: "sliding"
+  sample_rate: ${model.encoder.sample_rate}
+  audio_mono: true
+  audio_duration: 10
+  audio_normalize: true
+  audio_overlap: 1
+  # VAD
+  vad_hz: ${model.encoder.frame_hz}
+  vad_horizon: 2
+  vad_history: true
+  vad_history_times: [60, 30, 10, 5]
+  # Data
+  train_files: null
+  val_files: null
+  test_files: null
+  batch_size: 16
+  num_workers: 24
 
 hydra:
   run:

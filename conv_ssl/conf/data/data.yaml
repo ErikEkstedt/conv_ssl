@@ -1,4 +1,4 @@
-datasets: ["switchboard"]
+datasets: ["switchboard", "fisher"]
 type: "sliding"
 sample_rate: ${model.encoder.sample_rate}
 audio_mono: true

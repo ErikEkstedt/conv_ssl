@@ -4,9 +4,10 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 
 import torch
-from pytorch_lightning import Trainer, Callback
+from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
 
+from conv_ssl.callbacks import SymmetricSpeakersCallback
 from conv_ssl.model import VPModel
 from conv_ssl.utils import everything_deterministic, write_json, read_json
 from datasets_turntaking import DialogAudioDM
@@ -33,39 +34,6 @@ def tensor_dict_to_json(d):
             v = tensor_dict_to_json(v)
         new_d[k] = v
     return new_d
-
-
-class SymmetricSpeakersCallback(Callback):
-    """
-    This callback "flips" the speakers such that we get a fair evaluation not dependent on the
-    biased speaker-order / speaker-activity
-
-    The audio is mono which requires no change.
-
-    The only change we apply is to flip the channels in the VAD-tensor and get the corresponding VAD-history
-    which is defined as the ratio of speaker 0 (i.e. vad_history_flipped = 1 - vad_history)
-    """
-
-    def get_symmetric_batch(self, batch):
-        """Appends a flipped version of the batch-samples"""
-        for k, v in batch.items():
-            if k == "vad":
-                flipped = torch.stack((v[..., 1], v[..., 0]), dim=-1)
-            elif k == "vad_history":
-                flipped = 1.0 - v
-            else:
-                flipped = v
-            if isinstance(v, torch.Tensor):
-                batch[k] = torch.cat((v, flipped))
-            else:
-                batch[k] = v + flipped
-        return batch
-
-    def on_test_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
-        batch = self.get_symmetric_batch(batch)
-
-    def on_val_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
-        batch = self.get_symmetric_batch(batch)
 
 
 def test(model, dloader, max_batches=None, project="VPModelTest", online=False):
@@ -272,7 +240,7 @@ def evaluate(cfg: DictConfig) -> None:
     print("Num Workers: ", cfg.data.num_workers)
     print("Batch size: ", cfg.data.batch_size)
     print(cfg.data.datasets)
-    input()
+    input("Press Enter to Continue")
     dm = DialogAudioDM(
         datasets=cfg.data.datasets,
         type=cfg.data.type,
@@ -309,6 +277,8 @@ def evaluate(cfg: DictConfig) -> None:
         write_json(th, join(savepath, "thresholds.json"))
         torch.save(prediction, join(savepath, "predictions.pt"))
         torch.save(curves, join(savepath, "curves.pt"))
+        print("Saved Thresholds -> ", join(savepath, "thresholds.json"))
+        print("Saved Curves -> ", join(savepath, "curves.pt"))
     else:
         print("Loading thresholds: ", threshold_path)
         thresholds = read_json(threshold_path)
@@ -333,6 +303,7 @@ def evaluate(cfg: DictConfig) -> None:
     torch.save(metrics, join(savepath, "metric.pt"))
     metric_json = tensor_dict_to_json(metrics)
     write_json(metric_json, join(savepath, "metric.json"))
+    print("Saved metrics -> ", join(savepath, "metric.pt"))
     return metrics, prediction, curves
 
 

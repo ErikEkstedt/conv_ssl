@@ -170,9 +170,6 @@ class VPModel(pl.LightningModule):
 
         # Training params
         self.learning_rate = conf["optimizer"]["learning_rate"]
-        self.betas = conf["optimizer"]["betas"]
-        self.alpha = conf["optimizer"]["alpha"]
-        self.weight_decay = conf["optimizer"]["weight_decay"]
         self.save_hyperparameters()
 
     @property
@@ -236,12 +233,29 @@ class VPModel(pl.LightningModule):
         return s
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(
+        opt = torch.optim.AdamW(
             self.parameters(),
-            lr=self.conf["optimizer"]["learning_rate"],
+            lr=self.learning_rate,
             betas=self.conf["optimizer"]["betas"],
             weight_decay=self.conf["optimizer"]["weight_decay"],
         )
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=opt,
+            T_max=self.conf["optimizer"].get("lr_scheduler_tmax", 10),
+            last_epoch=-1,
+        )
+        return {
+            "optimizer": opt,
+            "lr_scheduler": {
+                "scheduler": lr_scheduler,
+                "interval": self.conf["optimizer"].get("lr_scheduler_interval", "step"),
+                "frequency": self.conf["optimizer"].get("lr_scheduler_freq", 1000),
+            },
+        }
+
+    def on_train_epoch_start(self):
+        if self.current_epoch == self.conf["optimizer"]["train_encoder_epoch"]:
+            self.net.encoder.unfreeze()
 
     def forward(self, *args, **kwargs):
         return self.net(*args, **kwargs)
