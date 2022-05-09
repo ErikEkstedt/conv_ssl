@@ -24,6 +24,121 @@ Docs beta:
 """
 
 
+def get_all_lang_speakers(tts, lang="en-US"):
+    voice_infos = {"female": [], "male": []}
+    for gender in ["female", "male"]:
+        for voice_info in tts.voices[gender]:
+            if lang in voice_info.name:
+                voice_infos[gender].append(voice_info)
+    return voice_infos
+
+
+def extract_phrases(
+    phrase_path="conv_ssl/evaluation/phrases.json", savepath="assets/phrases"
+):
+    tts = TTSGoogle()
+    audio_path = join(savepath, "audio")
+    file_path = join(savepath, "annotation")
+    makedirs(savepath, exist_ok=True)
+    makedirs(audio_path, exist_ok=True)
+    makedirs(file_path, exist_ok=True)
+
+    def save_audio_anno(example, utter, voice_info, short_long, gender, id):
+        name = f"{example}_{short_long}_{gender}_{id}"
+        wav_path = join(audio_path, name + ".wav")
+        anno_path = join(file_path, name + ".json")
+        tts.tts(text=utter, filepath=wav_path, voice_info=voice_info)
+        anno = {
+            "text": utterances["short"],
+            "audio_path": wav_path,
+            "gender": voice_info.ssml_gender.name.lower(),
+            "size": short_long,
+            "tts": voice_info.name,
+        }
+        write_json(anno, anno_path)
+        return anno
+
+    all_us_voice_info = get_all_lang_speakers(tts)
+    phrase_dict = read_json(phrase_path)
+
+    phrases = {}
+    pbar = tqdm(phrase_dict.items())
+    for example, utterances in pbar:
+        pbar.set_description(example)
+        phrases[example] = {"female": [], "male": []}
+        for gender in ["female", "male"]:
+            for voice_info in all_us_voice_info[gender]:
+                id = voice_info.name
+                for short_long in ["short", "long"]:
+                    anno = save_audio_anno(
+                        example,
+                        utterances[short_long],
+                        voice_info,
+                        short_long,
+                        gender,
+                        id,
+                    )
+                    phrases[example][gender].append(anno)
+
+    write_json(phrases, join(savepath, "phrases.json"))
+    return phrases
+
+
+def extract_phrases_beta(
+    phrase_path="conv_ssl/evaluation/phrases.json", savepath="assets/phrases_beta"
+):
+    tts = TTSGoogleBeta()
+    audio_path = join(savepath, "audio")
+    file_path = join(savepath, "annotation")
+    makedirs(savepath, exist_ok=True)
+    makedirs(audio_path, exist_ok=True)
+    makedirs(file_path, exist_ok=True)
+
+    def save_audio_anno(example, utter, voice_info, short_long, gender, id):
+        name = f"{example}_{short_long}_{gender}_{id}"
+        wav_path = join(audio_path, name + ".wav")
+        anno_path = join(file_path, name + ".json")
+        words, starts = tts.tts(
+            text=utter, filepath=wav_path, voice_info=voice_info, pitch=0
+        )
+        anno = {
+            "text": utterances["short"],
+            "audio_path": wav_path,
+            "gender": voice_info.ssml_gender.name.lower(),
+            "words": words,
+            "starts": starts,
+            "size": short_long,
+            "tts": voice_info.name,
+        }
+        write_json(anno, anno_path)
+        return anno
+
+    all_us_voice_info = get_all_lang_speakers(tts)
+    phrase_dict = read_json(phrase_path)
+
+    phrases = {}
+    pbar = tqdm(phrase_dict.items())
+    for example, utterances in pbar:
+        pbar.set_description(example)
+        phrases[example] = {"female": [], "male": []}
+        for gender in ["female", "male"]:
+            for voice_info in all_us_voice_info[gender]:
+                id = voice_info.name
+                for short_long in ["short", "long"]:
+                    anno = save_audio_anno(
+                        example,
+                        utterances[short_long],
+                        voice_info,
+                        short_long,
+                        gender,
+                        id,
+                    )
+                    phrases[example][gender].append(anno)
+
+    write_json(phrases, join(savepath, "phrases.json"))
+    return phrases
+
+
 class TTS(object):
     genders = ["male", "female", "netral"]
     gender_bias: float = 0.5
@@ -165,65 +280,6 @@ class TTSGoogleBeta(TTS):
         return words, starts
 
 
-def get_all_lang_speakers(tts, lang="en-US"):
-    voice_infos = {"female": [], "male": []}
-    for gender in ["female", "male"]:
-        for voice_info in tts.voices[gender]:
-            if lang in voice_info.name:
-                voice_infos[gender].append(voice_info)
-    return voice_infos
-
-
-def extract_phrases(
-    phrase_path="conv_ssl/evaluation/phrases.json", savepath="assets/phrases"
-):
-    tts = TTSGoogle()
-    audio_path = join(savepath, "audio")
-    file_path = join(savepath, "annotation")
-    makedirs(savepath, exist_ok=True)
-    makedirs(audio_path, exist_ok=True)
-    makedirs(file_path, exist_ok=True)
-
-    def save_audio_anno(example, utter, voice_info, short_long, gender, id):
-        name = f"{example}_{short_long}_{gender}_{id}"
-        wav_path = join(audio_path, name + ".wav")
-        anno_path = join(file_path, name + ".json")
-        tts.tts(text=utter, filepath=wav_path, voice_info=voice_info)
-        anno = {
-            "text": utterances["short"],
-            "audio_path": wav_path,
-            "gender": voice_info.ssml_gender.name.lower(),
-            "tts": voice_info.name,
-        }
-        write_json(anno, anno_path)
-        return anno
-
-    all_us_voice_info = get_all_lang_speakers(tts)
-    phrase_dict = read_json(phrase_path)
-
-    phrases = {}
-    pbar = tqdm(phrase_dict.items())
-    for example, utterances in pbar:
-        pbar.set_description(example)
-        phrases[example] = {"female": [], "male": []}
-        for gender in ["female", "male"]:
-            for voice_info in all_us_voice_info[gender]:
-                id = voice_info.name
-                for short_long in ["short", "long"]:
-                    anno = save_audio_anno(
-                        example,
-                        utterances[short_long],
-                        voice_info,
-                        short_long,
-                        gender,
-                        id,
-                    )
-                    phrases[example][gender].append(anno)
-
-    write_json(phrases, join(savepath, "phrases.json"))
-    return phrases
-
-
 def _test_tts():
     import sounddevice as sd
     from datasets_turntaking.utils import load_waveform
@@ -254,24 +310,7 @@ def _test_tts_normal():
     sd.play(y[0], samplerate=sr)
 
 
-def _test_process_path():
-    from os.path import basename
-
-    tts = TTSGoogle()
-
-    path = "conv_ssl/evaluation/phrases.json"
-
-    tts.process_short_long_phrases(path, savepath="assets/phrases")
-
-    data = read_json(path)
-    for example, utterances in data.items():
-        print(example)
-        print("Short: ", utterances["short"])
-        print("Long: ", utterances["long"])
-        print("-" * 40)
-
-    filepath = dialog[0]["audio"]
-
-
 if __name__ == "__main__":
-    phrases = extract_phrases()
+    # phrases = extract_phrases()
+
+    phrases_beta = extract_phrases_beta()

@@ -298,8 +298,7 @@ def evaluate(cfg: DictConfig) -> None:
     metric_json = tensor_dict_to_json(metrics)
     write_json(metric_json, join(savepath, "metric.json"))
     print("Saved metrics -> ", join(savepath, "metric.pt"))
-    return metrics, prediction, curves
 
 
 if __name__ == "__main__":
-    metrics, prediction, curves = evaluate()
+    evaluate()

@@ -107,12 +107,14 @@ def get_f0_statistic(
         statistic in valid_stats
     ), f"`statistic` must be one of {valid_stats} got {statistic}"
 
+    nb, c, _ = waveform.shape
+
     # Calculate F0 averages for each channel/speaker
     w = einops.rearrange(waveform, "b c n -> (b c) n")
     f0 = f0_kaldi_torch(
         w, sr=sample_rate, frame_length=frame_length, hop_length=hop_length
     )
-    f0 = einops.rearrange(f0, "(b c) n -> b c n", c=2)
+    f0 = einops.rearrange(f0, "(b c) n -> b c n", c=c)
 
     if statistic == "mean":
         target_f0 = f0.mean(-1).round()
