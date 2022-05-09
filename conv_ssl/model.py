@@ -176,6 +176,10 @@ class VPModel(pl.LightningModule):
     def frame_hz(self):
         return self.net.encoder.frame_hz
 
+    @property
+    def sample_rate(self):
+        return self.net.encoder.sample_rate
+
     def init_metric(
         self,
         conf=None,

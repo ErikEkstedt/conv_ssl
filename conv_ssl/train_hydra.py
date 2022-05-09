@@ -66,7 +66,6 @@ def train(cfg: DictConfig) -> None:
                 mode=cfg_dict["checkpoint"]["mode"],
                 monitor=cfg_dict["checkpoint"]["monitor"],
             ),
-            WandbArtifactCallback(),
             EarlyStopping(
                 monitor=cfg_dict["early_stopping"]["monitor"],
                 mode=cfg_dict["early_stopping"]["mode"],
@@ -75,6 +74,7 @@ def train(cfg: DictConfig) -> None:
                 verbose=False,
             ),
             LearningRateMonitor(),
+            WandbArtifactCallback(),
         ]
 
         if cfg_dict["optimizer"].get("swa_enable", False):

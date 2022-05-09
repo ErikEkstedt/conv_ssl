@@ -2,6 +2,8 @@ import torch
 import pytorch_lightning as pl
 import wandb
 
+from conv_ssl.augmentations import flatten_pitch_batch
+
 
 class SymmetricSpeakersCallback(pl.Callback):
     """
@@ -29,11 +31,59 @@ class SymmetricSpeakersCallback(pl.Callback):
                 batch[k] = v + flipped
         return batch
 
+    def on_train_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
+        batch = self.get_symmetric_batch(batch)
+
     def on_test_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
         batch = self.get_symmetric_batch(batch)
 
     def on_val_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
         batch = self.get_symmetric_batch(batch)
+
+
+class FlattenPitchCallback(pl.Callback):
+    """ """
+
+    def __init__(
+        self,
+        target_f0: int = -1,
+        statistic: str = "mean",
+        stats_frame_length: int = 800,
+        stats_hop_length: int = 320,
+        sample_rate: int = 16000,
+        to_mono: bool = True,
+    ):
+        super().__init__()
+        self.statistic = statistic
+        self.stats_frame_length = stats_frame_length
+        self.stats_hop_length = stats_hop_length
+        self.target_f0 = target_f0
+        self.sample_rate = sample_rate
+        self.to_mono = to_mono
+
+    def flatten_pitch(self, batch, device):
+        """Appends a flipped version of the batch-samples"""
+        flat_waveform = flatten_pitch_batch(
+            waveform=batch["waveform"].cpu(),
+            vad=batch["vad"],
+            target_f0=self.target_f0,
+            statistic=self.statistic,
+            stats_frame_length=self.stats_frame_length,
+            stats_hop_length=self.stats_hop_length,
+            sample_rate=self.sample_rate,
+            to_mono=self.to_mono,
+        )
+        batch["waveform"] = flat_waveform.to(device)
+        return batch
+
+    def on_test_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
+        batch = self.flatten_pitch(batch, device=pl_module.device)
+
+    def on_val_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
+        batch = self.flatten_pitch(batch, device=pl_module.device)
+
+    def on_train_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
+        batch = self.flatten_pitch(batch, device=pl_module.device)
 
 
 class WandbArtifactCallback(pl.Callback):

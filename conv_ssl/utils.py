@@ -60,6 +60,17 @@ def everything_deterministic():
     torch.use_deterministic_algorithms(mode=True)
 
 
+def tensor_dict_to_json(d):
+    new_d = {}
+    for k, v in d.items():
+        if isinstance(v, torch.Tensor):
+            v = v.tolist()
+        elif isinstance(v, dict):
+            v = tensor_dict_to_json(v)
+        new_d[k] = v
+    return new_d
+
+
 def to_device(batch, device="cuda"):
     new_batch = {}
     for k, v in batch.items():

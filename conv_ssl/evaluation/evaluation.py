@@ -9,7 +9,12 @@ from pytorch_lightning.loggers import WandbLogger
 
 from conv_ssl.callbacks import SymmetricSpeakersCallback
 from conv_ssl.model import VPModel
-from conv_ssl.utils import everything_deterministic, write_json, read_json
+from conv_ssl.utils import (
+    everything_deterministic,
+    write_json,
+    read_json,
+    tensor_dict_to_json,
+)
 from datasets_turntaking import DialogAudioDM
 
 MIN_THRESH = 0.01  # minimum threshold limit for S/L, S-pred, BC-pred
@@ -23,17 +28,6 @@ python conv_ssl/evaluation/evaluation.py \
         +checkpoint_path=/FULL/PATH/TO/CHECKPOINT/checkpoint.ckpt \
         +savepath=evaluation/the_model # relative hydra job-dir
 """
-
-
-def tensor_dict_to_json(d):
-    new_d = {}
-    for k, v in d.items():
-        if isinstance(v, torch.Tensor):
-            v = v.tolist()
-        elif isinstance(v, dict):
-            v = tensor_dict_to_json(v)
-        new_d[k] = v
-    return new_d
 
 
 def test(model, dloader, max_batches=None, project="VPModelTest", online=False):
