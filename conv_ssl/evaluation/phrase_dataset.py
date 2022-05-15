@@ -1,50 +1,12 @@
 import torch
 from torch.utils.data import Dataset
-from tqdm import tqdm
-
-from conv_ssl.utils import read_json, write_json
+from conv_ssl.utils import read_json
 from datasets_turntaking.utils import (
     load_waveform,
     get_audio_info,
     time_to_frames,
 )
 from vap_turn_taking.utils import vad_list_to_onehot, get_activity_history
-
-
-def _preprocess_vad(path="assets/phrases/phrases.json"):
-    try:
-        from conv_ssl.evaluation.vad import VadExtractor
-    except ImportError as e:
-        print(
-            "PyAnnote not installed. No preprocessing available... (only required once)"
-        )
-        raise e
-
-    vadder = VadExtractor()
-    sample_rate = 16000  # pyannot vad
-    data = read_json(path)
-    for example, gender_dict in tqdm(data.items()):
-        for gender, sample_list in gender_dict.items():
-            for sample in sample_list:
-                waveform, sr = load_waveform(
-                    sample["audio_path"], sample_rate=sample_rate
-                )
-                vad_list = vadder(waveform, sample_rate=sr)
-                sample["vad"] = vad_list
-    write_json(data, path)
-
-
-def _fix_size(path):
-    data = read_json(path)
-    for _, gender_dict in tqdm(data.items()):
-        for _, sample_list in gender_dict.items():
-            for sample in sample_list:
-                if "short" in sample["audio_path"]:
-                    size = "short"
-                else:
-                    size = "long"
-                sample["size"] = size
-    write_json(data, path)
 
 
 class PhraseDataset(Dataset):
@@ -93,10 +55,15 @@ class PhraseDataset(Dataset):
 
     def map_phrases_to_idx(self):
         indices = []
-        for example, gender_dict in self.data.items():
-            for gender, sample_list in gender_dict.items():
-                for ii in range(len(sample_list)):
-                    indices.append([example, gender, ii])
+        for example, v in self.data.items():
+            for long_short, vv in v.items():
+                for gender, sample_list in vv.items():
+                    for ii in range(len(sample_list)):
+                        indices.append([example, long_short, gender, ii])
+        # for example, gender_dict in self.data.items():
+        #     for gender, sample_list in gender_dict.items():
+        #         for ii in range(len(sample_list)):
+        #             indices.append([example, gender, ii])
         return indices
 
     def __repr__(self):
@@ -121,7 +88,7 @@ class PhraseDataset(Dataset):
     def __len__(self):
         return len(self.indices)
 
-    def get_sample(self, b, example):
+    def get_sample_data(self, b, example):
         """Get the sample from the dialog"""
         # Loads the dialog waveform (stereo) and normalize/to-mono for each
         # smaller segment in loop below
@@ -131,6 +98,14 @@ class PhraseDataset(Dataset):
             normalize=self.audio_normalize,
             mono=self.audio_mono,
         )
+
+        # dict to return
+        ret = {
+            "waveform": waveform,
+            "dataset_name": "phrases",
+            "session": f'{example}_{b["gender"]}_{b["tts"]}',
+        }
+        ret.update(b)
 
         # VAD-frame of relevant part
         if self.vad:
@@ -143,13 +118,6 @@ class PhraseDataset(Dataset):
                 duration=duration,
                 channel_last=True,
             )
-
-        # dict to return
-        ret = {
-            "waveform": waveform,
-            "dataset_name": "phrases",
-            "session": f'{example}_{b["gender"]}_{b["tts"]}',
-        }
 
         ##############################################
         # History
@@ -177,37 +145,30 @@ class PhraseDataset(Dataset):
             ret["vad"] = all_vad_frames[
                 start_frame : end_frame + self.vad_horizon
             ].unsqueeze(0)
+
+        ##############################################
+        # Include words/starts/size if included
+        ##############################################
+        if "words" in b:
+            ret["words"] = [b["words"]]
+        if "starts" in b:
+            ret["starts"] = [b["starts"]]
+        if "size" in b:
+            ret["size"] = [b["size"]]
         return ret
 
+    def get_sample(self, example, long_short, gender, id):
+        sample = self.data[example][long_short][gender][id]
+        return self.get_sample_data(sample, example)
+
     def __getitem__(self, idx):
-        example, gender, nidx = self.indices[idx]
-        sample = self.data[example][gender][nidx]
-
-        d = self.get_sample(sample, example)
-
-        # contain in list to mimic batch behavior
-        if "words" in sample:
-            d["words"] = [sample["words"]]
-        if "starts" in sample:
-            d["starts"] = [sample["starts"]]
-
-        if "size" in sample:
-            d["size"] = [sample["size"]]
-        return d
+        example, long_short, gender, nidx = self.indices[idx]
+        sample = self.data[example][long_short][gender][nidx]
+        return self.get_sample_data(sample, example)
 
 
 if __name__ == "__main__":
-
-    # _preprocess_vad("assets/phrases/phrases.json")
-    # _preprocess_vad("assets/phrases_beta/phrases.json")
-    # _fix_size("assets/phrases/phrases.json")
-
-    # dset = PhraseDataset("assets/phrases/phrases.json")
     dset = PhraseDataset("assets/phrases_beta/phrases.json")
-
-    example, gender, nidx = dset.indices[22]
-    sample = dset.data[example][gender][nidx]
-    d = dset[0]
-
-    for k, v in d.items():
+    sample = dset.get_sample("student", "short", "female", 0)
+    for k, v in sample.items():
         print(f"{k}: {type(v)}")

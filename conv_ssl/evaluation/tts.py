@@ -87,6 +87,7 @@ def extract_phrases(
 def extract_phrases_beta(
     phrase_path="conv_ssl/evaluation/phrases.json", savepath="assets/phrases_beta"
 ):
+
     tts = TTSGoogleBeta()
     audio_path = join(savepath, "audio")
     file_path = join(savepath, "annotation")
@@ -102,39 +103,40 @@ def extract_phrases_beta(
             text=utter, filepath=wav_path, voice_info=voice_info, pitch=0
         )
         anno = {
-            "text": utterances["short"],
+            "text": utter,
             "audio_path": wav_path,
             "gender": voice_info.ssml_gender.name.lower(),
             "words": words,
             "starts": starts,
             "size": short_long,
             "tts": voice_info.name,
+            "name": name,
         }
         write_json(anno, anno_path)
         return anno
 
     all_us_voice_info = get_all_lang_speakers(tts)
-    phrase_dict = read_json(phrase_path)
 
     phrases = {}
-    pbar = tqdm(phrase_dict.items())
+    pbar = tqdm(read_json(phrase_path).items())
     for example, utterances in pbar:
         pbar.set_description(example)
-        phrases[example] = {"female": [], "male": []}
-        for gender in ["female", "male"]:
-            for voice_info in all_us_voice_info[gender]:
-                id = voice_info.name
-                for short_long in ["short", "long"]:
+        phrases[example] = {}
+        for short_long, text in utterances.items():
+            phrases[example][short_long] = {}
+            for gender in ["female", "male"]:
+                phrases[example][short_long][gender] = []
+                for voice_info in all_us_voice_info[gender]:
+                    id = voice_info.name
                     anno = save_audio_anno(
-                        example,
-                        utterances[short_long],
-                        voice_info,
-                        short_long,
-                        gender,
-                        id,
+                        example=example,
+                        utter=text,
+                        voice_info=voice_info,
+                        short_long=short_long,
+                        gender=gender,
+                        id=id,
                     )
-                    phrases[example][gender].append(anno)
-
+                    phrases[example][short_long][gender].append(anno)
     write_json(phrases, join(savepath, "phrases.json"))
     return phrases
 
