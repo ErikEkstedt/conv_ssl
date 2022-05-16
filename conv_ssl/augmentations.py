@@ -348,10 +348,16 @@ class IntensityNeutralizer(object):
         )
         ints = praat_to_torch(intensity)  # .as_array()
         vad = self.intensity_vad(ints).unsqueeze(0)
+
+        mi = ints[ints > 0]
+        if len(mi) < 1:
+            return waveform, None
+
         if self.scale_stat == "max":
-            m = intensity.get_maximum()
+            m = mi.max().value.item()
         else:
-            m = intensity.get_average()
+            # m = intensity.get_average()
+            m = mi.mean().item()
 
         t = [
             intensity.get_time_from_frame_number(f + 1)
@@ -382,6 +388,9 @@ class IntensityNeutralizer(object):
     def __call__(self, waveform: torch.Tensor, vad=None):
         v1 = 1.0
         v0 = 1.0
+        if vad.ndim == 3:
+            vad = vad.squeeze(0)
+
         if vad is not None and self.vad_hz is not None:
             v0 = AF.resample(
                 vad[:, 0], orig_freq=self.vad_hz, new_freq=self.sample_rate
@@ -391,15 +400,29 @@ class IntensityNeutralizer(object):
             )
 
         if waveform.shape[0] > 1:
-            y0, m0 = self.neutralize_intensity(waveform[0] * v0)
-            y1, m1 = self.neutralize_intensity(waveform[1] * v1)
+            if isinstance(v0, torch.Tensor) and v0.sum() == 0:
+                y0, m0 = waveform[0], v0
+            else:
+                y0, m0 = self.neutralize_intensity(waveform[0] * v0)
+
+            if isinstance(v1, torch.Tensor) and v1.sum() == 0:
+                y1, m1 = waveform[1], v1
+            else:
+                y1, m1 = self.neutralize_intensity(waveform[1] * v1)
+
+            # print("y0: ", tuple(y0.shape))
+            # print("y1: ", tuple(y1.shape))
             yy = torch.stack((y0, y1), dim=1)
             m = torch.stack((m0, m1), dim=1)
             if self.to_mono:
                 yy = yy.mean(1, keepdim=True)
         else:
             v = torch.logical_or(v0, v1).float()
-            yy, m = self.neutralize_intensity(waveform[0] * v)
+            if v.sum() == 0:
+                yy, m = waveform, None
+            else:
+                yy, m = self.neutralize_intensity(waveform[0] * v)
+            # print("yy: ", tuple(yy.shape))
 
         yy = yy.to(waveform.device)
 

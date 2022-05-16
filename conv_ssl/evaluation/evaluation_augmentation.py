@@ -201,7 +201,7 @@ def evaluate(cfg: DictConfig) -> None:
         print(f"{k}: {v}")
 
     print(f"SAVEPATH: ", savepath)
-    input("Press Enter to Continue")
+    # input("Press Enter to Continue")
 
     ##################################
     # Test
