@@ -133,7 +133,11 @@ class ProjectionModel(nn.Module):
         # Encode Audio
         z = self.encode(waveform)
 
+        # Ugly: sometimes you may get an extra frame from waveform encoding
+        z = z[:, : va.shape[1]]
+
         # Vad conditioning
+        # Also Ugly...
         vc = self.vad_condition(va, va_history)
 
         # Add vad-conditioning to audio features
@@ -175,6 +179,10 @@ class VPModel(pl.LightningModule):
     @property
     def frame_hz(self):
         return self.net.encoder.frame_hz
+
+    @property
+    def sample_rate(self):
+        return self.net.encoder.sample_rate
 
     def init_metric(
         self,

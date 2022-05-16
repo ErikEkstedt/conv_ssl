@@ -1,4 +1,5 @@
-from os.path import join
+from pathlib import Path
+from os.path import join, basename, dirname as dr
 from os import makedirs
 from omegaconf import DictConfig, OmegaConf
 import hydra
@@ -9,31 +10,47 @@ from pytorch_lightning.loggers import WandbLogger
 
 from conv_ssl.callbacks import SymmetricSpeakersCallback
 from conv_ssl.model import VPModel
-from conv_ssl.utils import everything_deterministic, write_json, read_json
+from conv_ssl.utils import (
+    everything_deterministic,
+    write_json,
+    read_json,
+    tensor_dict_to_json,
+)
 from datasets_turntaking import DialogAudioDM
 
+# ugly path
+
+SAVEPATH = join(dr(dr(dr(__file__))), "assets/PaperB/eval")
 MIN_THRESH = 0.01  # minimum threshold limit for S/L, S-pred, BC-pred
 
 everything_deterministic()
 
 """
 python conv_ssl/evaluation/evaluation.py \
-        data.num_workers=4 \
-        data.batch_size=16 \
         +checkpoint_path=/FULL/PATH/TO/CHECKPOINT/checkpoint.ckpt \
-        +savepath=evaluation/the_model # relative hydra job-dir
+        data.num_workers=4 \
+        data.batch_size=10
 """
 
 
-def tensor_dict_to_json(d):
-    new_d = {}
-    for k, v in d.items():
-        if isinstance(v, torch.Tensor):
-            v = v.tolist()
-        elif isinstance(v, dict):
-            v = tensor_dict_to_json(v)
-        new_d[k] = v
-    return new_d
+def load_dm(model, cfg_dict, verbose=False):
+    data_conf = model.conf["data"]
+    data_conf["audio_mono"] = False
+    data_conf["datasets"] = cfg_dict["data"].get("datasets", data_conf["datasets"])
+    data_conf["batch_size"] = cfg_dict["data"].get(
+        "batch_size", data_conf["batch_size"]
+    )
+    data_conf["num_workers"] = cfg_dict["data"].get(
+        "num_workers", data_conf["num_workers"]
+    )
+    if verbose:
+        print("Num Workers: ", data_conf["num_workers"])
+        print("Batch size: ", data_conf["batch_size"])
+        print("Mono: ", data_conf["audio_mono"])
+        print("datasets: ", data_conf["datasets"])
+    dm = DialogAudioDM(**data_conf)
+    dm.prepare_data()
+    dm.setup("test")
 
 
 def test(model, dloader, max_batches=None, project="VPModelTest", online=False):
@@ -227,20 +244,20 @@ def evaluate(cfg: DictConfig) -> None:
     cfg_dict = OmegaConf.to_object(cfg)
     cfg_dict = dict(cfg_dict)
 
-    savepath = cfg.get("savepath", None)
-    assert savepath is not None, f"Please provide savepath by `+savepath=/save/path"
-
     # Load model
     model = VPModel.load_from_checkpoint(cfg.checkpoint_path, strict=False)
     model = model.eval()
     if torch.cuda.is_available():
         model = model.to("cuda")
 
+    savepath = join(SAVEPATH, basename(cfg.checkpoint_path).replace(".ckpt", ""))
+    savepath += "_" + "_".join(cfg.data.datasets)
+    Path(savepath).mkdir(exist_ok=True, parents=True)
+
     # Load data
     print("Num Workers: ", cfg.data.num_workers)
     print("Batch size: ", cfg.data.batch_size)
     print(cfg.data.datasets)
-    input("Press Enter to Continue")
     dm = DialogAudioDM(
         datasets=cfg.data.datasets,
         type=cfg.data.type,
@@ -258,12 +275,9 @@ def evaluate(cfg: DictConfig) -> None:
     )
     dm.prepare_data()
     dm.setup(None)
-    makedirs(savepath, exist_ok=True)
 
     # Threshold
     # Find the best thresholds (S-pred, BC-pred, S/L) on the validation set
-    curves = None
-    predictions = None
     threshold_path = cfg.get("thresholds", None)
     if threshold_path is None:
         print("#" * 60)
@@ -300,12 +314,10 @@ def evaluate(cfg: DictConfig) -> None:
     metrics["threshold_pred_bc"] = thresholds["pred_bc"]
     metrics["threshold_short_long"] = thresholds["short_long"]
 
-    torch.save(metrics, join(savepath, "metric.pt"))
     metric_json = tensor_dict_to_json(metrics)
     write_json(metric_json, join(savepath, "metric.json"))
     print("Saved metrics -> ", join(savepath, "metric.pt"))
-    return metrics, prediction, curves
 
 
 if __name__ == "__main__":
-    metrics, prediction, curves = evaluate()
+    evaluate()
