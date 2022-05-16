@@ -99,7 +99,7 @@ def train(cfg: DictConfig) -> None:
         trainer = pl.Trainer(
             logger=logger,
             callbacks=callbacks,
-            strategy=DDPStrategy(find_unused_parameters=False),
+            strategy=DDPStrategy(find_unused_parameters=True),
             **cfg_dict["trainer"],
         )
         trainer.fit(model, datamodule=dm)
