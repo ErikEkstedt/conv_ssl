@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+import torchaudio.transforms as AT
+
 from conv_ssl.augmentations import (
     flatten_pitch_batch,
     shift_pitch_batch,
@@ -75,11 +77,22 @@ class LowPass(nn.Module):
         self.norm = norm
         self.to_mono = to_mono
 
+        self.gain = AT.Vol(gain=20, gain_type="db")
+
     def normalize(self, x):
         assert x.ndim == 2, f"normalization expects (B, n_samples) got {x.shape}"
         xx = x - x.min(-1, keepdim=True).values
-        xx = 2 * xx / xx.max()
-        xx = xx - 1.0
+
+        xmax = xx.max(-1, keepdim=True).values
+        xx = xx / xmax
+        xx = 2 * xx - 1.0
+        return xx
+
+    def standardize(self, x, eps=1e-5):
+        assert x.ndim == 2, f"standardization expects (B, n_samples) got {x.shape}"
+        m = x.mean(-1, keepdim=True)
+        s = x.std(-1, keepdim=True)
+        xx = (x - m) / (s + eps)
         return xx
 
     def forward(self, waveform, *args, **kwargs):
@@ -90,7 +103,9 @@ class LowPass(nn.Module):
             waveform = waveform.mean(1)
 
         if self.norm:
-            waveform = self.normalize(waveform)
+            # waveform = self.standardize(waveform)
+            # waveform = self.normalize(waveform)
+            waveform = self.gain(waveform)
 
         return waveform
 
