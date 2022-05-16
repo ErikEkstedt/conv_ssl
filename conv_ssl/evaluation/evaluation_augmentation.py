@@ -8,14 +8,9 @@ import torch
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
 
-from conv_ssl.callbacks import (
-    SymmetricSpeakersCallback,
-    FlattenPitchCallback,
-    ShiftPitchCallback,
-    LowPassFilterCallback,
-    NeutralIntensityCallback,
-)
+from conv_ssl.callbacks import SymmetricSpeakersCallback
 from conv_ssl.model import VPModel
+import conv_ssl.transforms as CT
 from conv_ssl.utils import (
     everything_deterministic,
     write_json,
@@ -29,7 +24,7 @@ everything_deterministic()
 SAVEPATH = "/home/erik/projects/CCConv/conv_ssl/assets/PaperB/eval"
 
 
-def load_dm(model, cfg_dict, verbose=False):
+def load_dm(model, cfg_dict, transforms, verbose=False):
     data_conf = model.conf["data"]
     data_conf["audio_mono"] = False
     data_conf["datasets"] = cfg_dict["data"].get("datasets", data_conf["datasets"])
@@ -45,7 +40,7 @@ def load_dm(model, cfg_dict, verbose=False):
         print("Num Workers: ", data_conf["num_workers"])
         print("Batch size: ", data_conf["batch_size"])
         print("Mono: ", data_conf["audio_mono"])
-    dm = DialogAudioDM(**data_conf)
+    dm = DialogAudioDM(**data_conf, transforms=transforms)
     dm.prepare_data()
     dm.setup(None)
     return dm
@@ -54,6 +49,7 @@ def load_dm(model, cfg_dict, verbose=False):
 def get_augmentation_params(model, cfg, augmentation):
     name_suffix = ""
     aug_params = {}
+    transforms = None
     if augmentation == "flat_f0":
         aug_params = {
             "target_f0": cfg.get("target_f0", -1),
@@ -64,6 +60,7 @@ def get_augmentation_params(model, cfg, augmentation):
             "to_mono": True,
         }
         name_suffix = "flat_f0"
+        transforms = CT.FlatPitch(**aug_params)
     elif augmentation == "shift_f0":
         aug_params = {
             "factor": cfg.get("factor", 0.9),
@@ -71,6 +68,7 @@ def get_augmentation_params(model, cfg, augmentation):
             "to_mono": True,
         }
         name_suffix = f"shift_f0_{aug_params['factor']}"
+        transforms = CT.ShiftPitch(**aug_params)
     elif augmentation == "flat_intensity":
         aug_params = {
             "vad_hz": model.frame_hz,
@@ -82,6 +80,7 @@ def get_augmentation_params(model, cfg, augmentation):
             "to_mono": True,
         }
         name_suffix = "flat_intensity"
+        transforms = CT.FlatIntensity(**aug_params)
     elif augmentation == "only_f0":
         aug_params = {
             "cutoff_freq": cfg.get("cutoff_freq", 400),
@@ -89,15 +88,14 @@ def get_augmentation_params(model, cfg, augmentation):
             "norm": True,
             "to_mono": True,
         }
-        name_suffix = f"_only_f0_{aug_params['cutoff_freq']}"
-    return aug_params, name_suffix
+        name_suffix = f"only_f0_{aug_params['cutoff_freq']}"
+        transforms = CT.LowPass(**aug_params)
+    return transforms, aug_params, name_suffix
 
 
 def test_augmented(
     model,
     dloader,
-    augmentation,
-    aug_params,
     max_batches=None,
     project="VAPFlatTest",
     online=False,
@@ -122,22 +120,7 @@ def test_augmented(
             log_model=False,
         )
 
-    callbacks = []
-
-    if augmentation == "flat_f0":
-        callbacks.append(FlattenPitchCallback(**aug_params))
-    elif augmentation == "shift_f0":
-        callbacks.append(ShiftPitchCallback(**aug_params))
-    elif augmentation == "flat_intensity":
-        callbacks.append(NeutralIntensityCallback(**aug_params))
-    elif augmentation == "only_f0":
-        callbacks.append(LowPassFilterCallback(**aug_params))
-    else:
-        raise NotImplementedError(
-            f"{augmentation} not implemented. Choose ['only_f0', 'flat_pitch', 'shift_f0', 'flat_intensity']"
-        )
-    callbacks.append(SymmetricSpeakersCallback())
-
+    callbacks = [SymmetricSpeakersCallback()]
     # Limit batches
     if max_batches is not None:
         trainer = Trainer(
@@ -181,7 +164,11 @@ def evaluate(cfg: DictConfig) -> None:
     savepath = join(SAVEPATH, basename(cfg.checkpoint_path).replace(".ckpt", ""))
     savepath += "_" + "_".join(cfg.data.datasets)
     Path(savepath).mkdir(exist_ok=True, parents=True)
-    aug_params, name_suffix = get_augmentation_params(model, cfg, augmentation)
+    transforms, aug_params, name_suffix = get_augmentation_params(
+        model, cfg, augmentation
+    )
+
+    assert transforms is not None, "NO transformations"
 
     for k, v in aug_params.items():
         print(f"{k}: {v}")
@@ -191,7 +178,7 @@ def evaluate(cfg: DictConfig) -> None:
     # # Load Data
     # ##################################
     data_conf = model.conf["data"]
-    dm = load_dm(model, cfg_dict, verbose=True)
+    dm = load_dm(model, cfg_dict, transforms=transforms, verbose=True)
 
     print("Thresholds")
     threshold_path = join(savepath, "thresholds.json")
@@ -217,8 +204,6 @@ def evaluate(cfg: DictConfig) -> None:
     result = test_augmented(
         model,
         dm.test_dataloader(),
-        augmentation=augmentation,
-        aug_params=aug_params,
         online=False,
         max_batches=cfg_dict.get("max_batches", None),
     )[0]
