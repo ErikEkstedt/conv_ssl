@@ -16,11 +16,10 @@ import sounddevice as sd
 import parselmouth
 from parselmouth.praat import call
 
-from conv_ssl.augmentations import (
-    torch_to_praat_sound,
-    flatten_pitch_batch,
-    low_pass_filter_resample,
-)
+from conv_ssl.utils import write_json
+import conv_ssl.transforms as CT
+from conv_ssl.augmentations import torch_to_praat_sound
+
 from conv_ssl.evaluation.phrase_dataset import PhraseDataset
 from conv_ssl.model import VPModel
 from conv_ssl.utils import read_txt, everything_deterministic
@@ -47,27 +46,16 @@ def load_model_dset(checkpoint, phrase_path="assets/phrases_beta/phrases.json"):
     return model, dset
 
 
-def create_flat_batch(batch):
-    flat_waveform = flatten_pitch_batch(batch["waveform"].unsqueeze(1), batch["vad"])
-    flat_batch = {"waveform": flat_waveform}
+def create_transform_batch(batch, transform):
+    n_frames = batch["vad_history"].shape[1]
+    vad = batch["vad"][:, :n_frames]
+    new_waveform = transform(batch["waveform"].unsqueeze(0), vad=vad)
+    new_batch = {"waveform": new_waveform}
     for k, v in batch.items():
         if k == "waveform":
             continue
-        flat_batch[k] = deepcopy(v)
-    return flat_batch
-
-
-def create_low_pass_batch(batch, cutoff_freq, sample_rate):
-    flat_waveform = low_pass_filter_resample(
-        batch["waveform"].unsqueeze(1), cutoff_freq, sample_rate
-    )
-    flat_waveform = flat_waveform.mean(1)
-    flat_batch = {"waveform": flat_waveform}
-    for k, v in batch.items():
-        if k == "waveform":
-            continue
-        flat_batch[k] = deepcopy(v)
-    return flat_batch
+        new_batch[k] = deepcopy(v)
+    return new_batch
 
 
 def get_hold_prob(p, vad, pre_cutoff=0.5, post_cutoff=0.2, frame_hz=100):
@@ -181,15 +169,21 @@ def plot_sample(p_ns, waveform, words=None, starts=None, sample_rate=16000, plot
     ax[3].hlines(y=0.5, xmin=0, xmax=len(p_ns), linestyle="dashed", color="k")
 
     if starts is not None and words is not None:
-        for word, start in zip(words, starts):
+        y_min = -0.8
+        y_max = 0.8
+        diff = y_max - y_min
+        steps = 4
+        for ii, (word, start) in enumerate(zip(words, starts)):
+            yy = y_min + diff * (ii % steps) / steps
             ax[0].text(
-                x=start,
-                y=-0.5,
+                x=start + 0.005,
+                y=yy,
                 s=word,
                 fontsize=12,
-                # fontweight='bold',
-                rotation=30,
                 horizontalalignment="left",
+            )
+            ax[0].vlines(
+                start, ymin=-1, ymax=1, linestyle="dashed", linewidth=1, color="k"
             )
     plt.subplots_adjust(
         left=0.1, bottom=0.05, right=0.9, top=0.95, wspace=None, hspace=0.09
@@ -366,11 +360,12 @@ def match_duration(
     return torch.from_numpy(y)
 
 
-def save_duration_audio(dset, align_root="assets/phrases_beta/alignment"):
-    def audio_path_to_align_path(audio_path):
-        name = basename(audio_path).replace(".wav", "") + ".TextGrid"
-        return join(align_root, name)
+def audio_path_to_align_path(audio_path, root):
+    name = basename(audio_path).replace(".wav", "") + ".TextGrid"
+    return join(root, name)
 
+
+def save_duration_audio(dset, align_root="assets/phrases_beta/alignment"):
     # TODO: pretty much done
     sample_rate = 16000
     for example, v in tqdm(dset.data.items()):
@@ -397,89 +392,156 @@ def save_duration_audio(dset, align_root="assets/phrases_beta/alignment"):
                 torchaudio.save(wpath, y, sample_rate=16000)
 
 
+def identity(waveform, vad):
+    return waveform.squeeze(0)
+
+
+def evaluation(model, dset, checkpoint_name, savepath="assets/PaperB/eval_phrases"):
+    """
+    Aggregate evaluation
+
+    * save global stats
+    * save all figures
+    """
+
+    transforms = {
+        "flat_f0": CT.FlatPitch(),
+        "only_f0": CT.LowPass(),
+        "shift_f0": CT.ShiftPitch(),
+        "flat_intensity": CT.FlatIntensity(vad_hz=model.frame_hz),
+        "regular": identity,
+    }
+
+    savepath = "assets/PaperB/eval_phrases"
+    root = join(savepath, checkpoint_name)
+    fig_root = join(root, "figs")
+    wav_root = join(root, "audio")
+    Path(fig_root).mkdir(parents=True, exist_ok=True)
+    Path(wav_root).mkdir(parents=True, exist_ok=True)
+    print("root: ", root)
+    print("fig root: ", fig_root)
+    print("wav root: ", wav_root)
+
+    stats = {"short": {}, "long": {}}
+    pbar = tqdm(range(len(dset)))
+    for example, v in dset.data.items():
+        for short_long, vv in v.items():
+            for gender, sample_list in vv.items():
+                for nidx in range(len(sample_list)):
+                    fig_dir = join(fig_root, example, short_long, gender)
+                    wav_dir = join(wav_root, example, short_long, gender)
+                    Path(fig_dir).mkdir(parents=True, exist_ok=True)
+                    Path(wav_dir).mkdir(parents=True, exist_ok=True)
+                    sample = dset.get_sample(example, short_long, gender, nidx)
+                    orig_sample = deepcopy(sample)
+                    orig_waveform = deepcopy(sample["waveform"].unsqueeze(0))
+                    n_frames = sample["vad_history"].shape[1]
+                    vad = sample["vad"][:, :n_frames]
+                    # name of specific sample file
+                    name = f"{example}_{gender}_{short_long}_{sample['tts']}"
+                    # save waveform
+                    for augmentation, transform in transforms.items():
+                        orig_sample["waveform"] = transform(orig_waveform, vad=vad)
+                        loss, out, prob, sample = model.output(orig_sample)
+                        # Save Figures
+                        fig, _ = plot_sample(
+                            prob["p"][0, :, 0],
+                            sample["waveform"],
+                            words=sample["words"][0],
+                            starts=sample["starts"][0],
+                        )
+                        fig.savefig(join(fig_dir, name + f"_{augmentation}.png"))
+                        # save waveform
+                        wavpath = join(wav_dir, name + f"_{augmentation}.wav")
+                        torchaudio.save(
+                            wavpath, sample["waveform"], sample_rate=model.sample_rate
+                        )
+                        # Save Statistics
+                        pre, end, post = get_hold_prob(
+                            prob["p"],
+                            sample["vad"],
+                            pre_cutoff=0.5,
+                            post_cutoff=0.2,
+                            frame_hz=model.frame_hz,
+                        )
+                        # if short_long == "long":
+                        if augmentation not in stats[short_long]:
+                            stats[short_long][augmentation] = {"pre": [], "end": []}
+                        stats[short_long][augmentation]["pre"].append(pre)
+                        stats[short_long][augmentation]["end"].append(end)
+                    plt.close("all")
+                    pbar.update()
+
+    # Global Stats
+    statistics = {}
+    for long_short in ["long", "short"]:
+        statistics[long_short] = {}
+        for augmentation, pre_end in stats[long_short].items():
+            pre = 0
+            pre_frames = 0
+            end = 0
+            end_frames = 0
+            for s in pre_end["pre"]:
+                pre += s.sum()
+                pre_frames += len(s)
+            for s in pre_end["end"]:
+                end += s.sum()
+                end_frames += len(s)
+            pre /= pre_frames
+            end /= end_frames
+            pre = pre.item()
+            end = 1 - end.item()
+            avg = (end + pre) / 2
+            statistics[long_short][augmentation] = {"pre": pre, "end": end, "avg": avg}
+    torch.save(stats, join(root, "stats.pt"))
+    write_json(statistics, join(root, "score.json"))
+    print("Saved stats -> ", join(root, "score.json"))
+    return statistics, stats
+
+
+def _test_transforms(model, dset):
+    sample = dset.get_sample("student", "long", "female", 0)
+    augmentation = "flat_f0"
+    # augmentation = "only_f0"
+    # augmentation = "shift_f0"
+    # augmentation = "flat_intensity"
+    if augmentation == "flat_f0":
+        transform = CT.FlatPitch()
+        # sample = create_flat_batch(sample)
+        sample = create_transform_batch(sample, transform)
+    elif augmentation == "only_f0":
+        transform = CT.LowPass()
+        # sample = create_flat_batch(sample)
+        sample = create_transform_batch(sample, transform)
+    elif augmentation == "shift_f0":
+        transform = CT.ShiftPitch()
+        # sample = shift_pitch_batch(sample, factor)
+        sample = create_transform_batch(sample, transform)
+    elif augmentation == "flat_intensity":
+        transform = CT.FlatIntensity(vad_hz=model.frame_hz)
+        # sample = NeutralIntensityCallback(vad_hz=model.frame_hz).neutral_batch(sample)
+        sample = create_transform_batch(sample, transform)
+    loss, out, prob, sample = model.output(sample)
+    waveform = sample["waveform"]
+    p_ns = prob["p"][0, :, 0]
+    w = sample["words"][0]
+    s = sample["starts"][0]
+    fig, ax = plot_sample(p_ns, waveform, words=w, starts=s)
+    plt.show()
+
+
 if __name__ == "__main__":
 
-    ch_root = "assets/PaperB/checkpoints"
-    # model = VPModel.load_from_checkpoint(
-    #     "assets/PaperB/checkpoints/unused/swb_fis_18ep.ckpt"
-    # )
-    checkpoint = join(ch_root, "cpc_48_50hz_15gqq5s5.ckpt")
-    # checkpoint = "assets/PaperB/checkpoints/cpc_48_20hz_2ucueis8.ckpt"
-    # checkpoint = "assets/PaperB/checkpoints/cpc_44_100hz_unfreeze_12ep.ckpt"
-    model, dset = load_model_dset(checkpoint)
-    checkpoint_name = basename(checkpoint)
-    plot_all_samples(model, dset, "assets/PaperB/figs/phrases", checkpoint_name)
+    from argparse import ArgumentParser
 
-    # # sample = dset[6]
-    # flat = False
-    # if flat:
-    #     sample = create_flat_batch(sample)
-    # loss, out, prob, sample = model.output(sample)
-    # waveform = sample["waveform"]
-    # p_ns = prob["p"][0, :, 0]
-    # w = sample["words"][0]
-    # s = sample["starts"][0]
-    # fig, ax = plot_sample(p_ns, waveform, words=w, starts=s)
-    # plt.show()
+    parser = ArgumentParser()
+    parser.add_argument("--checkpoint", type=str)
+    args = parser.parse_args()
 
-    # all_stats = {}
-    # for ckpt in [
-    #     "cpc_48_20hz_2ucueis8.ckpt",
-    #     "cpc_48_50hz_15gqq5s5.ckpt",
-    #     "cpc_44_100hz_unfreeze_12ep.ckpt",
-    # ]:
-    #     checkpoint = join(ch_root, ckpt)
-    #     model, dset = load_model_dset(checkpoint)
-    #     checkpoint_name = basename(checkpoint)
-    #     stats = extract_phrase_stats(model, dset)
-    #     all_stats[checkpoint_name] = {
-    #             'pre_mean': stats[]
-    #             }
-    #     print(checkpoint_name)
-    #     print("PRE")
-    #     print(
-    #         "\tRegular: ", stats["regular"]["pre"].mean(), stats["regular"]["pre"].std()
-    #     )
-    #     print(
-    #         "\tFlat: ",
-    #         stats["flat_pitch"]["pre"].mean(),
-    #         stats["flat_pitch"]["pre"].std(),
-    #     )
-    #     print("\tLP: ", stats["low_pass"]["pre"].mean(), stats["low_pass"]["pre"].std())
-    #     print("END")
-    #     print(
-    #         "\tRegular: ", stats["regular"]["end"].mean(), stats["regular"]["end"].std()
-    #     )
-    #     print(
-    #         "\tFlat: ",
-    #         stats["flat_pitch"]["end"].mean(),
-    #         stats["flat_pitch"]["end"].std(),
-    #     )
-    #     print("\tLP: ", stats["low_pass"]["end"].mean(), stats["low_pass"]["end"].std())
-
-    # PRE
-    #         Regular:  tensor(0.8765) tensor(0.1250)
-    #         Flat:  tensor(0.7554) tensor(0.1944)
-    #         LP:  tensor(0.8529) tensor(0.0695)
-    # END
-    #         Regular:  tensor(0.5520) tensor(0.2388)
-    #         Flat:  tensor(0.5420) tensor(0.2475)
-    #         LP:  tensor(0.8376) tensor(0.0594)
-    # cpc_48_50hz_15gqq5s5.ckpt
-    # PRE
-    #         Regular:  tensor(0.8508) tensor(0.1278)
-    #         Flat:  tensor(0.7365) tensor(0.1693)
-    #         LP:  tensor(0.9199) tensor(0.0433)
-    # END
-    #         Regular:  tensor(0.3048) tensor(0.2440)
-    #         Flat:  tensor(0.3281) tensor(0.2313)
-    #         LP:  tensor(0.9046) tensor(0.0446)
-    # cpc_44_100hz_unfreeze_12ep.ckpt
-    # PRE
-    #         Regular:  tensor(0.8748) tensor(0.0973)
-    #         Flat:  tensor(0.8571) tensor(0.1128)
-    #         LP:  tensor(0.8670) tensor(0.0721)
-    # END
-    #         Regular:  tensor(0.4711) tensor(0.2666)
-    #         Flat:  tensor(0.6498) tensor(0.2374)
-    #         LP:  tensor(0.8321) tensor(0.0758)
+    # ch_root = "assets/PaperB/checkpoints"
+    # checkpoint = join(ch_root, "cpc_48_20hz_2ucueis8.ckpt")
+    # checkpoint = join(ch_root, "cpc_48_50hz_15gqq5s5.ckpt")
+    # checkpoint = join(ch_root, "cpc_48_100hz_3mkvq5fk.ckpt")
+    model, dset = load_model_dset(args.checkpoint)
+    checkpoint_name = basename(args.checkpoint).replace(".ckpt", "")
+    statistics, stats = evaluation(model, dset, checkpoint_name)

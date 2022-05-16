@@ -66,7 +66,7 @@ class ShiftPitch(nn.Module):
 class LowPass(nn.Module):
     def __init__(
         self,
-        cutoff_freq: int = 300,
+        cutoff_freq: int = 400,
         sample_rate: int = 16000,
         norm: bool = True,
         to_mono: bool = True,
