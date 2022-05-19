@@ -1,4 +1,4 @@
-aug_eval="python conv_ssl/evaluation/evaluation_augmentation.py data.batch_size=20 data.num_workers=24"
+aug_eval="python conv_ssl/evaluation/evaluation_augmentation.py data.batch_size=4 data.num_workers=4"
 swb="data.datasets=['switchboard']"
 fisher="data.datasets=['fisher']"
 both="data.datasets=['fisher','switchboard']"
@@ -47,16 +47,16 @@ cpc100=$chpath"cpc_48_100hz_3mkvq5fk.ckpt"
 
 # both last
 $aug_eval $both $cpc20 +augmentation='flat_f0'
-$aug_eval $both $cpc20 +augmentation='shift_f0'
-$aug_eval $both $cpc20 +augmentation='only_f0'
-# $aug_eval $both $cpc20 +augmentation='flat_intensity'
-
-$aug_eval $both $cpc50 +augmentation='flat_f0'
-$aug_eval $both $cpc50 +augmentation='shift_f0'
-$aug_eval $both $cpc50 +augmentation='only_f0'
-# $aug_eval $both $cpc50 +augmentation='flat_intensity'
-
-$aug_eval $both $cpc100 +augmentation='flat_f0'
-$aug_eval $both $cpc100 +augmentation='shift_f0'
-$aug_eval $both $cpc100 +augmentation='only_f0'
+# $aug_eval $both $cpc20 +augmentation='shift_f0'
+# $aug_eval $both $cpc20 +augmentation='only_f0'
+# # $aug_eval $both $cpc20 +augmentation='flat_intensity'
+#
+# $aug_eval $both $cpc50 +augmentation='flat_f0'
+# $aug_eval $both $cpc50 +augmentation='shift_f0'
+# $aug_eval $both $cpc50 +augmentation='only_f0'
+# # $aug_eval $both $cpc50 +augmentation='flat_intensity'
+#
+# $aug_eval $both $cpc100 +augmentation='flat_f0'
+# $aug_eval $both $cpc100 +augmentation='shift_f0'
+# $aug_eval $both $cpc100 +augmentation='only_f0'
 # $aug_eval $both $cpc100 +augmentation='flat_intensity'

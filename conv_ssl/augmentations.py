@@ -56,9 +56,9 @@ def praat_to_torch(sound):
     return torch.from_numpy(y)
 
 
-###############################################
-###################### F0 #####################
-###############################################
+############################################
+################### F0 #####################
+############################################
 def create_flat_pitch_tier(manipulation, target_f0: float, start: float, end: float):
     """Flat pitch tier"""
     pitch_tier = call(manipulation, "Create PitchTier", "flat", start, end)
@@ -255,6 +255,9 @@ def shift_pitch_batch(
     return flat
 
 
+############################################
+################### Low-Pass ###############
+############################################
 def low_pass_filter_resample(x, cutoff_freq, sample_rate=16000):
     new_freq = int(cutoff_freq * 2)  # Nyquist
     x = AF.resample(x, orig_freq=sample_rate, new_freq=new_freq)
@@ -274,6 +277,9 @@ def smooth(x, kernel_size=15):
     return averager(x)[:, 0]
 
 
+############################################
+################### Intensity ##############
+############################################
 def intensity_mask(intensity, cutoff=0.2, kernel_size=15):
     ints = smooth(intensity, kernel_size)
     ints[ints < 0] = 0
