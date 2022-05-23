@@ -1,4 +1,4 @@
-aug_eval="python conv_ssl/evaluation/evaluation_augmentation.py data.batch_size=20 data.num_workers=24"
+aug_eval="python conv_ssl/evaluation/evaluation_augmentation.py data.batch_size=4 data.num_workers=4"
 swb="data.datasets=['switchboard']"
 fisher="data.datasets=['fisher']"
 both="data.datasets=['fisher','switchboard']"
@@ -34,30 +34,31 @@ $aug_eval $both $cpc100 +augmentation='shift_f0'
 $aug_eval $both $cpc100 +augmentation='only_f0'
 $aug_eval $both $cpc100 +augmentation='flat_intensity'
 
-# Augmentations: low_pass (only_f0), flat_f0, flat_intensity, equal_duration
-$aug_eval $swb $cpc20 +augmentation='flat_f0'
-$aug_eval $swb $cpc20 +augmentation='shift_f0'
-$aug_eval $swb $cpc20 +augmentation='flat_intensity'
-$aug_eval $swb $cpc20 +augmentation='only_f0'
-$aug_eval $fisher $cpc20 +augmentation='flat_f0'
-$aug_eval $fisher $cpc20 +augmentation='shift_f0'
-$aug_eval $fisher $cpc20 +augmentation='flat_intensity'
-$aug_eval $fisher $cpc20 +augmentation='only_f0'
+# # Switchboard
+# $aug_eval $swb $cpc20 +augmentation='flat_f0'
+# $aug_eval $swb $cpc20 +augmentation='shift_f0'
+# $aug_eval $swb $cpc20 +augmentation='flat_intensity'
+# $aug_eval $swb $cpc20 +augmentation='only_f0'
+# $aug_eval $swb $cpc50 +augmentation='flat_f0'
+# $aug_eval $swb $cpc50 +augmentation='shift_f0'
+# $aug_eval $swb $cpc50 +augmentation='flat_intensity'
+# $aug_eval $swb $cpc50 +augmentation='only_f0'
+# $aug_eval $swb $cpc100 +augmentation='flat_f0'
+# $aug_eval $swb $cpc100 +augmentation='shift_f0'
+# $aug_eval $swb $cpc100 +augmentation='flat_intensity'
+# $aug_eval $swb $cpc100 +augmentation='only_f0'
 
-$aug_eval $swb $cpc50 +augmentation='flat_f0'
-$aug_eval $swb $cpc50 +augmentation='shift_f0'
-$aug_eval $swb $cpc50 +augmentation='flat_intensity'
-$aug_eval $swb $cpc50 +augmentation='only_f0'
-$aug_eval $fisher $cpc50 +augmentation='flat_f0'
-$aug_eval $fisher $cpc50 +augmentation='shift_f0'
-$aug_eval $fisher $cpc50 +augmentation='flat_intensity'
-$aug_eval $fisher $cpc50 +augmentation='only_f0'
 
-$aug_eval $swb $cpc100 +augmentation='flat_f0'
-$aug_eval $swb $cpc100 +augmentation='shift_f0'
-$aug_eval $swb $cpc100 +augmentation='flat_intensity'
-$aug_eval $swb $cpc100 +augmentation='only_f0'
-$aug_eval $fisher $cpc100 +augmentation='flat_f0'
-$aug_eval $fisher $cpc100 +augmentation='shift_f0'
-$aug_eval $fisher $cpc100 +augmentation='flat_intensity'
-$aug_eval $fisher $cpc100 +augmentation='only_f0'
+# # FISHER
+# $aug_eval $fisher $cpc20 +augmentation='flat_f0'
+# $aug_eval $fisher $cpc20 +augmentation='shift_f0'
+# $aug_eval $fisher $cpc20 +augmentation='flat_intensity'
+# $aug_eval $fisher $cpc20 +augmentation='only_f0'
+# $aug_eval $fisher $cpc50 +augmentation='flat_f0'
+# $aug_eval $fisher $cpc50 +augmentation='shift_f0'
+# $aug_eval $fisher $cpc50 +augmentation='flat_intensity'
+# $aug_eval $fisher $cpc50 +augmentation='only_f0'
+# $aug_eval $fisher $cpc100 +augmentation='flat_f0'
+# $aug_eval $fisher $cpc100 +augmentation='shift_f0'
+# $aug_eval $fisher $cpc100 +augmentation='flat_intensity'
+# $aug_eval $fisher $cpc100 +augmentation='only_f0'

@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 
-import torchaudio.transforms as AT
-
 from conv_ssl.augmentations import (
     flatten_pitch_batch,
     shift_pitch_batch,
@@ -66,7 +64,7 @@ class ShiftPitch(nn.Module):
 class LowPass(nn.Module):
     def __init__(
         self,
-        cutoff_freq: int = 300,
+        cutoff_freq: int = 400,
         sample_rate: int = 16000,
         norm: bool = True,
         to_mono: bool = True,
@@ -76,8 +74,7 @@ class LowPass(nn.Module):
         self.sample_rate = sample_rate
         self.norm = norm
         self.to_mono = to_mono
-
-        self.gain = AT.Vol(gain=20, gain_type="db")
+        # self.gain = AT.Vol(gain=10, gain_type="db")
 
     def normalize(self, x):
         assert x.ndim == 2, f"normalization expects (B, n_samples) got {x.shape}"
@@ -104,8 +101,8 @@ class LowPass(nn.Module):
 
         if self.norm:
             # waveform = self.standardize(waveform)
-            # waveform = self.normalize(waveform)
-            waveform = self.gain(waveform)
+            waveform = self.normalize(waveform)
+            # waveform = self.gain(waveform)
 
         return waveform
 

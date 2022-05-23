@@ -230,32 +230,6 @@ class ShiftPitchCallback(pl.Callback):
         batch = self.shift_pitch(batch, device=pl_module.device)
 
 
-class FlatIntensityCallback(pl.Callback):
-    def __init__(self, sample_rate: int = 16000, to_mono: bool = True):
-        super().__init__()
-        self.sample_rate = sample_rate
-        self.to_mono = to_mono
-
-    def flat_intensity(self, batch, device):
-        flat_waveform = flat_intensity_batch(
-            waveform=batch["waveform"].cpu(),
-            vad=batch["vad"],
-            sample_rate=self.sample_rate,
-            to_mono=self.to_mono,
-        )
-        batch["waveform"] = flat_waveform.to(device)
-        return batch
-
-    def on_test_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
-        batch = self.flat_intensity(batch, device=pl_module.device)
-
-    def on_val_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
-        batch = self.flat_intensity(batch, device=pl_module.device)
-
-    def on_train_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
-        batch = self.flat_intensity(batch, device=pl_module.device)
-
-
 class WandbArtifactCallback(pl.Callback):
     def upload(self, trainer):
         run = trainer.logger.experiment
