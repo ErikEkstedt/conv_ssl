@@ -1,0 +1,111 @@
+---
+layout: base
+fig: "/data/cpc_48_50hz_15gqq5s5/figs/"
+wav: "/data/cpc_48_50hz_15gqq5s5/audio/"
+---
+
+<div class="phrase-container">
+  <h2> {{page.phrase}} </h2>
+  <p><b>{{page.short_text}}</b> {{page.cont_text}} </p>
+  {% for speaker in site.data.speakers %}
+  {% for tts in speaker.tts %}
+  <table border="1" class="inlineTable">
+    <tr>
+      <td>Audio</td>
+      <td>Long</td>
+      <td>Short</td>
+    </tr>
+    <tr id={{speaker.gender}}>
+      <td> Original {{speaker.gender}}</td>
+      <td>
+        <img src={{layout.fig}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_regular.png
+          class="figures" alt="">
+        <audio controls>
+          <source src={{layout.wav}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_regular.wav
+            type="audio/wav">
+        </audio>
+      </td>
+      <td>
+        <img src={{layout.fig}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_regular.png
+          class="figures" alt="">
+        <audio controls>
+          <source src={{layout.wav}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_regular.wav
+            type="audio/wav">
+        </audio>
+      </td>
+    </tr>
+
+    <tr id={{speaker.gender}}>
+      <td> Flat F0 {{speaker.gender}} </td>
+      <td>
+        <img
+          src={{layout.fig}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_f0.png
+          class="figures" alt="">
+        <audio controls>
+          <source
+            src={{layout.wav}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_f0.wav
+            type="audio/wav">
+        </audio>
+      </td>
+      <td>
+        <img
+          src={{layout.fig}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_f0.png
+          class="figures" alt="">
+        <audio controls>
+          <source
+            src={{layout.wav}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_f0.wav
+            type="audio/wav">
+        </audio>
+      </td>
+    </tr>
+    <tr id={{speaker.gender}}>
+      <td> Flat Intensity {{speaker.gender}} </td>
+      <td>
+        <img
+          src={{layout.fig}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_intensity.png
+          class="figures" alt="">
+        <audio controls>
+          <source
+            src={{layout.wav}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_intensity.wav
+            type="audio/wav">
+        </audio>
+      </td>
+      <td>
+        <img
+          src={{layout.fig}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_intensity.png
+          class="figures" alt="">
+        <audio controls>
+          <source
+            src={{layout.wav}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_intensity.wav
+            type="audio/wav">
+        </audio>
+      </td>
+    </tr>
+    <tr id={{speaker.gender}}>
+      <td> Low Pass {{speaker.gender}} </td>
+      <td>
+        <img
+          src={{layout.fig}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_only_f0.png
+          class="figures" alt="">
+        <audio controls>
+          <source
+            src={{layout.wav}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_only_f0.wav
+            type="audio/wav">
+        </audio>
+      </td>
+      <td>
+        <img
+          src={{layout.fig}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_only_f0.png
+          class="figures" alt="">
+        <audio controls>
+          <source
+            src={{layout.wav}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_only_f0.wav
+            type="audio/wav">
+        </audio>
+      </td>
+    </tr>
+  </table>
+  <br>
+  {% endfor %}
+  {% endfor %}
+</div>

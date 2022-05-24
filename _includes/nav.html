@@ -1,0 +1,11 @@
+<nav class='navbar'>
+  <ul>
+  <!-- <button><a class="navButton" href="{{ page.url | relative_url }}">Home</a></button> -->
+    {% for post in site.posts %}
+    <button>
+        <a class="navButton" href="{{ post.url }}">{{ post.title }}</a>
+    </button>
+    {% endfor %}
+  </ul>
+</nav>
+
