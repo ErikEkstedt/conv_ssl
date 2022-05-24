@@ -7,7 +7,6 @@ conv_ssl/
 lightning_logs/
 runs/
 wandb/
-_data/
 
 *.lock
 

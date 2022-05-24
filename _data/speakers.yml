@@ -1,0 +1,13 @@
+- speaker:
+  gender: "female"
+  tts: 
+    - "_en-US-Wavenet-G"
+    - "_en-US-Wavenet-F"
+    - "_en-US-Wavenet-E"
+
+- speaker:
+  gender: "male"
+  tts: 
+    - "_en-US-Wavenet-A"
+    - "_en-US-Wavenet-I"
+    - "_en-US-Wavenet-J"
