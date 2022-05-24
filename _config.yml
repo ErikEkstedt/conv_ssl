@@ -1,4 +1,8 @@
 theme: jekyll-theme-cayman
+title: How Much does Prosody Help Turn-taking?
+description: Investigations using Voice Activity Projection Models
+baseurl: "conv_ssl"
+url: "https://erikekstedt.github.io"
 
 # Super slow to compile without exclusion
 exclude:
