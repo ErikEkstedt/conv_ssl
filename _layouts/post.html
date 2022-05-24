@@ -1,13 +1,21 @@
 ---
 layout: base
-fig: "/data/cpc_48_50hz_15gqq5s5/figs/"
-wav: "/data/cpc_48_50hz_15gqq5s5/audio/"
+fig: "../../../data/cpc_48_50hz_15gqq5s5/figs/"
+wav: "../../../data/cpc_48_50hz_15gqq5s5/audio/"
 ---
 
-site.url: {{site.url}}
-<br>
-page.url: {{page.url}}
-<br>
+{% assign image_files = site.static_files %}
+
+<ul>
+{% for myimage in image_files %}
+  <li>
+
+  {{ myimage.path }}
+  </li>
+{% endfor %}
+</ul>
+
+
 <div class="phrase-container">
   <h2> {{page.phrase}} </h2>
   <p><b>{{page.short_text}}</b> {{page.cont_text}} </p>
