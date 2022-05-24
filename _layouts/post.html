@@ -1,11 +1,8 @@
 ---
 layout: base
-fig: "data/cpc_48_50hz_15gqq5s5/figs/"
-wav: "data/cpc_48_50hz_15gqq5s5/audio/"
+fig: "../../../data/cpc_48_50hz_15gqq5s5/figs/"
+wav: "../../../data/cpc_48_50hz_15gqq5s5/audio/"
 ---
-
-{% assign figpath =  layout.fig | relative_url  %}
-{% assign wavpath =  layout.wav | relative_url  %}
 
 <div class="phrase-container">
   <h2> {{page.phrase}} </h2>
@@ -21,18 +18,18 @@ wav: "data/cpc_48_50hz_15gqq5s5/audio/"
     <tr id={{speaker.gender}}>
       <td> Original {{speaker.gender}}</td>
       <td>
-        <img src={{figpath}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_regular.png
+        <img src={{layout.fig}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_regular.png
           class="figures" alt="">
         <audio controls>
-          <source src={{wavpath}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_regular.wav
+          <source src={{layout.wav}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_regular.wav
             type="audio/wav">
         </audio>
       </td>
       <td>
-        <img src={{figpath}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_regular.png
+        <img src={{layout.fig}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_regular.png
           class="figures" alt="">
         <audio controls>
-          <source src={{wavpath}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_regular.wav
+          <source src={{layout.wav}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_regular.wav
             type="audio/wav">
         </audio>
       </td>
@@ -42,21 +39,21 @@ wav: "data/cpc_48_50hz_15gqq5s5/audio/"
       <td> Flat F0 {{speaker.gender}} </td>
       <td>
         <img
-          src={{figpath}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_f0.png
+          src={{layout.fig}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_f0.png
           class="figures" alt="">
         <audio controls>
           <source
-            src={{wavpath}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_f0.wav
+            src={{layout.wav}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_f0.wav
             type="audio/wav">
         </audio>
       </td>
       <td>
         <img
-          src={{figpath}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_f0.png
+          src={{layout.fig}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_f0.png
           class="figures" alt="">
         <audio controls>
           <source
-            src={{wavpath}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_f0.wav
+            src={{layout.wav}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_f0.wav
             type="audio/wav">
         </audio>
       </td>
@@ -65,21 +62,21 @@ wav: "data/cpc_48_50hz_15gqq5s5/audio/"
       <td> Flat Intensity {{speaker.gender}} </td>
       <td>
         <img
-          src={{figpath}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_intensity.png
+          src={{layout.fig}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_intensity.png
           class="figures" alt="">
         <audio controls>
           <source
-            src={{wavpath}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_intensity.wav
+            src={{layout.wav}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_flat_intensity.wav
             type="audio/wav">
         </audio>
       </td>
       <td>
         <img
-          src={{figpath}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_intensity.png
+          src={{layout.fig}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_intensity.png
           class="figures" alt="">
         <audio controls>
           <source
-            src={{wavpath}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_intensity.wav
+            src={{layout.wav}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_flat_intensity.wav
             type="audio/wav">
         </audio>
       </td>
@@ -88,21 +85,21 @@ wav: "data/cpc_48_50hz_15gqq5s5/audio/"
       <td> Low Pass {{speaker.gender}} </td>
       <td>
         <img
-          src={{figpath}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_only_f0.png
+          src={{layout.fig}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_only_f0.png
           class="figures" alt="">
         <audio controls>
           <source
-            src={{wavpath}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_only_f0.wav
+            src={{layout.wav}}/{{page.phrase}}/long/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_long{{tts}}_only_f0.wav
             type="audio/wav">
         </audio>
       </td>
       <td>
         <img
-          src={{figpath}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_only_f0.png
+          src={{layout.fig}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_only_f0.png
           class="figures" alt="">
         <audio controls>
           <source
-            src={{wavpath}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_only_f0.wav
+            src={{layout.wav}}/{{page.phrase}}/short/{{speaker.gender}}/{{page.phrase}}_{{speaker.gender}}_short{{tts}}_only_f0.wav
             type="audio/wav">
         </audio>
       </td>
