@@ -1,0 +1,101 @@
+html {
+    background-color: lightgrey;
+    font-family: sans-serif;
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color : lightgrey;
+    margin: auto;
+    width: 100%;
+    min-width: 1000px;
+    max-width: 2000px;
+    padding: 0;
+}
+
+table {
+    text-align: center;
+    align-content: center;
+    vertical-align: middle;
+    border-collapse: collapse;
+    width: 100%;
+}
+
+th, td{
+    width: auto;
+    padding: 1%;
+    text-align: center;
+    align-content: center;
+    vertical-align: middle;
+    border-collapse: collapse;
+}
+
+tr img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: auto;
+}
+
+.column {
+  float: left;
+  width: 50%;
+}
+
+/* Clear floats after the columns */
+.row:after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+.navbar {
+  align-content: center;
+  vertical-align: middle;
+  text-align: center;
+  background-color: white;
+}
+
+#female {
+  background-color: #D0FFC360;
+}
+#male {
+  background-color: #FFECB360;
+}
+
+.navButton {
+  
+}
+
+/*---------------------------------------------------------------------*/
+/*---------------------------------------------------------------------*/
+/*---------------------------------------------------------------------*/
+/*---------------------------------------------------------------------*/
+
+#authors {
+  z-index:100;
+  color: black;
+  font-size: 10px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.abstract {
+  background:  white;
+  height: auto;
+  position: relative;
+	padding: 10px 10px;
+	text-align: center;
+	font-size: 12px;
+}
+
+.phrase-container {
+  background:  white;
+  height: auto;
+  /* margin-top: 20px; */
+  padding: 2%;
+  position: relative;
+}

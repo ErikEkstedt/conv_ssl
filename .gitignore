@@ -1,0 +1,18 @@
+# From main branches not necessary here
+__pycache__*
+artifacts/
+assets/
+conv_ssl.egg-info/
+conv_ssl/
+lightning_logs/
+runs/
+wandb/
+_data/
+
+*.lock
+
+pyrightconfig.json
+
+# Jekyll local stuff
+_site/
+.jekyll-cache/
