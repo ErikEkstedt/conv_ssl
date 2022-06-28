@@ -1,9 +1,13 @@
 from omegaconf import OmegaConf
-from os.path import dirname
-import torch
-from torch.nn.utils.rnn import pad_sequence
+from os.path import basename, dirname
 from hydra import compose, initialize
 import json
+
+import torch
+import torchaudio
+import torchaudio.functional as AF
+from torchaudio.backend.sox_io_backend import info as info_sox
+from torch.nn.utils.rnn import pad_sequence
 
 
 def everything_deterministic():
@@ -294,3 +298,79 @@ class OmegaConfArgs:
                         if argname in args:
                             conf[field][setting] = args[argname]
         return conf
+
+
+def time_to_samples(t, sample_rate):
+    return int(t * sample_rate)
+
+
+def time_to_frames(t, hop_time):
+    return int(t / hop_time)
+
+
+def sample_to_time(n_samples, sample_rate):
+    return n_samples / sample_rate
+
+
+def get_audio_info(audio_path):
+    info = info_sox(audio_path)
+    return {
+        "name": basename(audio_path),
+        "duration": sample_to_time(info.num_frames, info.sample_rate),
+        "sample_rate": info.sample_rate,
+        "num_frames": info.num_frames,
+        "bits_per_sample": info.bits_per_sample,
+        "num_channels": info.bits_per_sample,
+    }
+
+
+def load_waveform(
+    path,
+    sample_rate=None,
+    start_time=None,
+    end_time=None,
+    normalize=False,
+    mono=False,
+    audio_normalize_threshold=0.05,
+):
+    if start_time is not None:
+        info = get_audio_info(path)
+        frame_offset = time_to_samples(start_time, info["sample_rate"])
+        num_frames = info["num_frames"]
+        if end_time is not None:
+            num_frames = time_to_samples(end_time, info["sample_rate"]) - frame_offset
+        else:
+            num_frames = num_frames - frame_offset
+        x, sr = torchaudio.load(path, frame_offset=frame_offset, num_frames=num_frames)
+    else:
+        x, sr = torchaudio.load(path)
+
+    if normalize:
+        if x.shape[0] > 1:
+            if x[0].abs().max() > audio_normalize_threshold:
+                x[0] /= x[0].abs().max()
+            if x[1].abs().max() > audio_normalize_threshold:
+                x[1] /= x[1].abs().max()
+        else:
+            if x.abs().max() > audio_normalize_threshold:
+                x /= x.abs().max()
+
+    if mono and x.shape[0] > 1:
+        x = x.mean(dim=0).unsqueeze(0)
+        if normalize:
+            if x.abs().max() > audio_normalize_threshold:
+                x /= x.abs().max()
+
+    if sample_rate:
+        if sr != sample_rate:
+            x = AF.resample(x, orig_freq=sr, new_freq=sample_rate)
+            sr = sample_rate
+    return x, sr
+
+
+def get_tg_vad_list(tg):
+    """only a single speaker"""
+    vad_list = []
+    for s, e, _ in tg["words"]:
+        vad_list.append([s, e])
+    return [vad_list, []]
