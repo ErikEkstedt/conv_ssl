@@ -332,7 +332,9 @@ class VPModel(pl.LightningModule):
             out_loss["frames"] = loss
         return out_loss, out, batch
 
-    def load_sample(self, audio_path, vad_list, normalize=True, mono_channel=True):
+    def load_sample(
+        self, audio_path_or_waveform, vad_list, normalize=True, mono_channel=True
+    ):
         """
         Get the sample from the dialog
 
@@ -349,19 +351,23 @@ class VPModel(pl.LightningModule):
 
         # Loads the dialog waveform (stereo) and normalize/to-mono for each
         # smaller segment in loop below
-        ret = {
-            "waveform": load_waveform(
-                audio_path,
+
+        ret = {}
+        if isinstance(audio_path_or_waveform, str):
+            ret["waveform"] = load_waveform(
+                audio_path_or_waveform,
                 sample_rate=self.sample_rate,
                 normalize=normalize,
                 mono=mono_channel,
             )[0]
-        }
+            duration = get_audio_info(audio_path_or_waveform)["duration"]
+        else:
+            ret["waveform"] = audio_path_or_waveform
+            duration = audio_path_or_waveform.shape[-1] / self.sample_rate
 
         ##############################################
         # VAD-frame of relevant part
         ##############################################
-        duration = get_audio_info(audio_path)["duration"]
         end_frame = time_to_frames(duration, vad_hop_time)
         all_vad_frames = vad_list_to_onehot(
             vad_list,

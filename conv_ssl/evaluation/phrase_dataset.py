@@ -56,55 +56,62 @@ def plot_sample_data(sample, sample_rate=16000, ax=None, fontsize=12, plot=False
     ax[0].set_yticks([])
     ax[0].set_ylabel("waveform", fontsize=fontsize)
 
-    target_word = EXAMPLE_TO_TARGET_WORD[sample["example"]]
+    target_word = None
+    if "example" in sample:
+        target_word = EXAMPLE_TO_TARGET_WORD[sample["example"]]
     # bounds = get_word_times(target_word, sample)
     # end_time = bounds[0][1]
 
-    # Plot text on top of waveform
     SCP_line_x = None
-    y_min = -0.8
-    y_max = 0.8
-    diff = y_max - y_min
-    steps = 4
-    for ii, (start_time, end_time, word) in enumerate(sample["words"]):
-        yy = y_min + diff * (ii % steps) / steps
-        mid = start_time + 0.5 * (end_time - start_time)
+    if "words" in sample:
+        # Plot text on top of waveform
+        y_min = -0.8
+        y_max = 0.8
+        diff = y_max - y_min
+        steps = 4
+        for ii, (start_time, end_time, word) in enumerate(sample["words"]):
+            yy = y_min + diff * (ii % steps) / steps
+            mid = start_time + 0.5 * (end_time - start_time)
 
-        # previous word was SCP
-        c = "k"
-        llw = 1
-        if sample["words"][ii - 1][-1] == target_word and sample["size"] == "long":
-            c = "r"
-            llw = 2
-            SCP_line_x = start_time
+            # previous word was SCP
+            c = "k"
+            llw = 1
+            if target_word is not None:
+                if (
+                    sample["words"][ii - 1][-1] == target_word
+                    and sample["size"] == "long"
+                ):
+                    c = "r"
+                    llw = 2
+                    SCP_line_x = start_time
 
-        ax[0].text(
-            x=mid,
-            y=yy,
-            s=word,
-            fontsize=12,
-            horizontalalignment="center",
-        )
+            ax[0].text(
+                x=mid,
+                y=yy,
+                s=word,
+                fontsize=12,
+                horizontalalignment="center",
+            )
+            ax[0].vlines(
+                start_time,
+                ymin=-1,
+                ymax=1,
+                linestyle="dashed",
+                linewidth=llw,
+                color=c,
+                alpha=0.8,
+            )
+
+        # final end of word
         ax[0].vlines(
-            start_time,
+            sample["words"][-1][1],
             ymin=-1,
             ymax=1,
-            linestyle="dashed",
-            linewidth=llw,
-            color=c,
+            # linestyle="dashed",
+            linewidth=2,
+            color="r",
             alpha=0.8,
         )
-
-    # final end of word
-    ax[0].vlines(
-        sample["words"][-1][1],
-        ymin=-1,
-        ymax=1,
-        # linestyle="dashed",
-        linewidth=2,
-        color="r",
-        alpha=0.8,
-    )
 
     # SPEC
     img = librosa.display.specshow(
@@ -117,14 +124,16 @@ def plot_sample_data(sample, sample_rate=16000, ax=None, fontsize=12, plot=False
         ax=ax[1],
     )
     ymin, ymax = ax[1].get_ylim()
-    ax[1].vlines(
-        sample["words"][-1][1],
-        ymin=ymin,
-        ymax=ymax,
-        # linestyle="dashed",
-        linewidth=2,
-        color="r",
-    )
+    if "words" in sample:
+        ax[1].vlines(
+            sample["words"][-1][1],
+            ymin=ymin,
+            ymax=ymax,
+            # linestyle="dashed",
+            linewidth=2,
+            color="r",
+        )
+
     if SCP_line_x is not None:
         ax[1].vlines(
             SCP_line_x,
@@ -149,14 +158,15 @@ def plot_sample_data(sample, sample_rate=16000, ax=None, fontsize=12, plot=False
         ymax += 5
         ax[2].set_ylim([ymin, ymax])
     ymin, ymax = ax[2].get_ylim()
-    ax[2].vlines(
-        sample["words"][-1][1],
-        ymin=ymin,
-        ymax=ymax,
-        # linestyle="dashed",
-        linewidth=2,
-        color="r",
-    )
+    if "words" in sample:
+        ax[2].vlines(
+            sample["words"][-1][1],
+            ymin=ymin,
+            ymax=ymax,
+            # linestyle="dashed",
+            linewidth=2,
+            color="r",
+        )
     if SCP_line_x is not None:
         ax[2].vlines(
             SCP_line_x,

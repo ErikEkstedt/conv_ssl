@@ -64,8 +64,9 @@ def plot_sample(
     # Next speaker probs
     _ = plot_next_speaker(p_ns, ax=ax[3], fontsize=fontsize)
 
-    end_frame = round(sample["words"][-1][1] * frame_hz)
-    ax[3].vlines(end_frame, ymin=-1, ymax=1, linewidth=2, color="r")
+    if "words" in sample:
+        end_frame = round(sample["words"][-1][1] * frame_hz)
+        ax[3].vlines(end_frame, ymin=-1, ymax=1, linewidth=2, color="r")
 
     if scp_line_x is not None:
         scp_frame = round(scp_line_x * frame_hz)
