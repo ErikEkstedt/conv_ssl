@@ -146,3 +146,5 @@ pyrightconfig.json
 *.avi
 .jekyll*
 _site/
+.streamlit/
+
