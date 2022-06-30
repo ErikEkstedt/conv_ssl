@@ -13,7 +13,7 @@ from conv_ssl.utils import (
     get_tg_vad_list,
     load_waveform,
     read_json,
-    write_json,
+    read_txt,
 )
 from conv_ssl.evaluation.duration import read_text_grid
 from conv_ssl.evaluation.evaluation_phrases import plot_sample
@@ -24,6 +24,11 @@ everything_deterministic()
 CHECKPOINT = "example/cpc_48_50hz_15gqq5s5.ckpt"
 SAMPLE_RATE = 16000
 TG_TMP_PATH = "tmp_textgrid.TextGrid"
+
+
+EX_WAV = "example/student_long_female_en-US-Wavenet-G.wav"
+EX_TG = "example/student_long_female_en-US-Wavenet-G.TextGrid"
+EX_VA = "example/vad_list.json"
 
 
 @st.cache
@@ -83,6 +88,35 @@ def run_model():
         st.session_state.fig = fig
 
 
+def sample():
+    waveform, _ = load_waveform(
+        EX_WAV, sample_rate=SAMPLE_RATE, normalize=True, mono=True
+    )
+    tg = read_text_grid(EX_TG)
+    vad_list = get_tg_vad_list(tg)
+    sample = st.session_state.model.load_sample(waveform, vad_list)
+    sample["words"] = tg["words"]
+    sample["phones"] = tg["phones"]
+
+    loss, out, probs, sample = st.session_state.model.output(sample)
+    # Save
+    data = {
+        "loss": {"vp": loss["vp"].item(), "frames": loss["frames"].tolist()},
+        "probs": out["logits_vp"].softmax(-1).tolist(),
+        "labels": out["va_labels"].tolist(),
+        "p": probs["p"].tolist(),
+        "p_bc": probs["bc_prediction"].tolist(),
+    }
+    st.session_state.output_data = data
+    fig, ax = plot_sample(
+        probs["p"][0, :, 0],
+        sample,
+        sample_rate=st.session_state.model.sample_rate,
+        frame_hz=st.session_state.model.frame_hz,
+    )
+    st.session_state.fig = fig
+
+
 def clear():
     st.session_state.fig = None
 
@@ -119,6 +153,36 @@ def check_password():
 if __name__ == "__main__":
 
     if check_password():
+        with st.sidebar:
+            st.header("Sample")
+
+            with open(EX_WAV, "rb") as f:
+                st.download_button(
+                    "Download Wav", f, file_name="sample.wav", mime="audio/wav"
+                )
+
+            # st.subheader("VA List")
+            # st.text(read_json(EX_VA), expanded=False)
+            with open(EX_TG, "rb") as f:
+                st.download_button(
+                    "Download TextGrid", f, file_name="sample_tg.TextGrid"
+                )
+
+            with open(EX_VA, "rb") as f:
+                st.download_button(
+                    "Download VA list",
+                    f,
+                    file_name="sample_va.json",
+                    mime="application/json",
+                )
+
+            st.subheader("Inspect")
+            with st.expander("TextGrid"):
+                with open(EX_TG, "r", encoding="utf-8") as f:
+                    st.text(f.read())
+            with st.expander("VA List"):
+                st.json(read_json(EX_VA), expanded=True)
+
         if "model" not in st.session_state:
             st.session_state.model = load_model()
 
@@ -146,12 +210,14 @@ if __name__ == "__main__":
 
         st.audio(audio)
         with st.container():
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
                 st.button(label="Run model", on_click=run_model)
             with c2:
-                st.button(label="Clear", on_click=clear)
+                st.button(label="Run Sample", on_click=sample)
             with c3:
+                st.button(label="Clear", on_click=clear)
+            with c4:
                 st.download_button(
                     label="Download",
                     data=json.dumps(st.session_state.output_data),
