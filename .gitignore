@@ -15,3 +15,5 @@ pyrightconfig.json
 # Jekyll local stuff
 _site/
 .jekyll-cache/
+.sass-cache/
+.streamlit/

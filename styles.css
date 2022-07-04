@@ -52,13 +52,39 @@ tr img {
   clear: both;
 }
 
+.abstract {
+  background:  white;
+  height: auto;
+  position: relative;
+	padding: 10px 10px;
+	text-align: center;
+	font-size: 12px;
+}
+
 .navbar {
   align-content: center;
   vertical-align: middle;
   text-align: center;
   background-color: white;
+	font-size: 14px;
 }
 
+.phrase-container {
+  background:  white;
+  height: auto;
+  /* margin-top: 20px; */
+  padding: 2%;
+	font-size: 14px;
+  position: relative;
+}
+
+#authors {
+  z-index:100;
+  color: black;
+  font-size: 10px;
+  font-weight: bold;
+  text-align: center;
+}
 #female {
   background-color: #D0FFC360;
 }
@@ -75,27 +101,4 @@ tr img {
 /*---------------------------------------------------------------------*/
 /*---------------------------------------------------------------------*/
 
-#authors {
-  z-index:100;
-  color: black;
-  font-size: 10px;
-  font-weight: bold;
-  text-align: center;
-}
 
-.abstract {
-  background:  white;
-  height: auto;
-  position: relative;
-	padding: 10px 10px;
-	text-align: center;
-	font-size: 12px;
-}
-
-.phrase-container {
-  background:  white;
-  height: auto;
-  /* margin-top: 20px; */
-  padding: 2%;
-  position: relative;
-}

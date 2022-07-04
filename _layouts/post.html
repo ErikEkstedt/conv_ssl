@@ -6,6 +6,10 @@ wav: "../../../data/cpc_48_50hz_15gqq5s5/audio/"
 
 <div class="phrase-container">
   <h2> {{page.phrase}} </h2>
+
+  <p> Visualizations over short/long phrases including various perturbations.</p>
+  <hr>
+
   <p><b>{{page.short_text}}</b> {{page.cont_text}} </p>
   {% for speaker in site.data.speakers %}
   {% for tts in speaker.tts %}
