@@ -1,2 +1,2 @@
-from .encoder import Encoder, MODEL_HZ
+from .encoder import Encoder
 from .autoregressive import AR

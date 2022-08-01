@@ -1,0 +1,28 @@
+encoder:
+  pretrained: true
+  output_layer: 1
+  sample_rate: 16000
+  name: cpc
+  frame_hz: 100
+  freeze: True
+
+va_cond:
+  history: true
+  history_bins: 5
+
+ar:
+  type: 'transformer'
+  dim: 256
+  num_layers: 4
+  num_heads: 4
+  use_pos_emb: 1
+  abspos: true
+  sizeSeq: 1024
+  dff_k: 3
+  dropout: 0.4
+
+vap:
+  bin_times: [.2, .4, .6, .8]
+  type: 'discrete'
+  pre_frames: 2
+  bin_threshold: 0.5

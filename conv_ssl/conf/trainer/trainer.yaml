@@ -1,0 +1,4 @@
+gpus: -1
+fast_dev_run: 0
+deterministic: true
+max_epochs: 30

@@ -1,130 +1,13 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-# SOURCE: https://github.com/facebookresearch/CPC_audio
 import torch
 import torch.nn as nn
 import math
 
+from typing import Optional, Tuple
 
-class ScaledDotProductAttention(nn.Module):
-    def __init__(
-        self,
-        sizeSeq,  # Size of the input sequence
-        dk,  # Dimension of the input sequence
-        dropout,  # Dropout parameter
-        relpos=False,
-    ):  # Do we retrieve positional information ?
-        super(ScaledDotProductAttention, self).__init__()
-
-        self.drop = nn.Dropout(dropout)
-        self.softmax = nn.Softmax(dim=2)
-        self.relpos = relpos
-        self.sizeSeq = sizeSeq
-
-        if relpos:
-            self.Krelpos = nn.Parameter(torch.Tensor(dk, sizeSeq))
-            self.initmat_(self.Krelpos)
-            self.register_buffer("z", torch.zeros(1, sizeSeq, 1))
-
-        # A mask is set so that a node never queries data in the future
-        mask = torch.tril(torch.ones(sizeSeq, sizeSeq), diagonal=0)
-        mask = 1 - mask
-        mask[mask == 1] = -float("inf")
-        self.register_buffer("mask", mask.unsqueeze(0))
-
-    def initmat_(self, mat, dim=0):
-        stdv = 1.0 / math.sqrt(mat.size(dim))
-        mat.data.uniform_(-stdv, stdv)
-
-    def forward(self, Q, K, V):
-        # Input dim : N x sizeSeq x dk
-        QK = torch.bmm(Q, K.transpose(-2, -1))
-        n = Q.shape[1]  # used for correct mask
-
-        if self.relpos:
-            bsz = Q.size(0)
-            QP = Q.matmul(self.Krelpos)
-            # This trick with z fills QP's diagonal with zeros
-            QP = torch.cat((self.z.expand(bsz, -1, -1), QP), 2)
-            QK += QP.view(bsz, self.sizeSeq + 1, self.sizeSeq)[:, 1:, :]
-
-        A = self.softmax(QK / math.sqrt(K.size(-1)) + self.mask[:, :n, :n])
-        return torch.bmm(self.drop(A), V)
-
-
-class MultiHeadAttention(nn.Module):
-    def __init__(
-        self,
-        sizeSeq,  # Size of a sequence
-        dropout,  # Dropout parameter
-        dmodel,  # Model's dimension
-        nheads,  # Number of heads in the model
-        abspos,
-    ):  # Is positional information encoded in the input ?
-        super(MultiHeadAttention, self).__init__()
-        self.Wo = nn.Linear(dmodel, dmodel, bias=False)
-        self.Wk = nn.Linear(dmodel, dmodel, bias=False)
-        self.Wq = nn.Linear(dmodel, dmodel, bias=False)
-        self.Wv = nn.Linear(dmodel, dmodel, bias=False)
-        self.nheads = nheads
-        self.dk = dmodel // nheads
-        self.Att = ScaledDotProductAttention(
-            sizeSeq, self.dk, dropout, relpos=not abspos
-        )
-
-    def trans_(self, x):
-        bsz, bptt, h, dk = x.size(0), x.size(1), self.nheads, self.dk
-        return (
-            x.view(bsz, bptt, h, dk)
-            .transpose(1, 2)
-            .contiguous()
-            .view(bsz * h, bptt, dk)
-        )
-
-    def reverse_trans_(self, x):
-        bsz, bptt, h, dk = x.size(0) // self.nheads, x.size(1), self.nheads, self.dk
-        return (
-            x.view(bsz, h, bptt, dk)
-            .transpose(1, 2)
-            .contiguous()
-            .view(bsz, bptt, h * dk)
-        )
-
-    def forward(self, Q, K, V):
-        q = self.trans_(self.Wq(Q))
-        k = self.trans_(self.Wk(K))
-        v = self.trans_(self.Wv(V))
-        y = self.reverse_trans_(self.Att(q, k, v))
-        return self.Wo(y)
-
-
-class FFNetwork(nn.Module):
-    def __init__(self, din, dout, dff, dropout):
-        super(FFNetwork, self).__init__()
-        self.lin1 = nn.Linear(din, dff, bias=True)
-        self.lin2 = nn.Linear(dff, dout, bias=True)
-        self.relu = nn.ReLU()
-        self.drop = nn.Dropout(dropout)
-
-    def forward(self, x):
-        return self.lin2(self.drop(self.relu(self.lin1(x))))
-
-
-class TransformerLayer(nn.Module):
-    def __init__(
-        self, sizeSeq=32, dmodel=512, dff=2048, dropout=0.1, nheads=8, abspos=False
-    ):
-        super(TransformerLayer, self).__init__()
-        self.multihead = MultiHeadAttention(sizeSeq, dropout, dmodel, nheads, abspos)
-        self.ln_multihead = nn.LayerNorm(dmodel)
-        self.ffnetwork = FFNetwork(dmodel, dmodel, dff, dropout)
-        self.ln_ffnetwork = nn.LayerNorm(dmodel)
-
-    def forward(self, x):
-        y = self.ln_multihead(x + self.multihead(Q=x, K=x, V=x))
-        return self.ln_ffnetwork(y + self.ffnetwork(y))
+from conv_ssl.models.multi_head_attention import (
+    MultiHeadAttentionAlibi,
+    MultiHeadAttention,
+)
 
 
 class StaticPositionEmbedding(nn.Module):
@@ -132,7 +15,6 @@ class StaticPositionEmbedding(nn.Module):
         super(StaticPositionEmbedding, self).__init__()
         pos = torch.arange(0.0, seqlen).unsqueeze(1).repeat(1, dmodel)
         dim = torch.arange(0.0, dmodel).unsqueeze(0).repeat(seqlen, 1)
-        # div = torch.exp(-math.log(10000) * (2 * (dim // 2) / dmodel))
         div = torch.exp(
             -math.log(10000) * (2 * torch.div(dim, 2, rounding_mode="trunc") / dmodel)
         )
@@ -141,79 +23,179 @@ class StaticPositionEmbedding(nn.Module):
         pos[:, 1::2] = torch.cos(pos[:, 1::2])
         self.register_buffer("pe", pos.unsqueeze(0))
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.pe[:, : x.size(1), :]
 
 
-class CausalTransformer(nn.Module):
+def ffn_block(
+    din: int,
+    dff: int,
+    activation: str = "GELU",
+    dropout: float = 0.0,
+    bias: bool = False,
+) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Linear(din, dff, bias=bias),
+        getattr(nn, activation)(),
+        nn.Dropout(p=dropout),
+        nn.Linear(dff, din, bias=bias),
+    )
+
+
+class TransformerLayer(nn.Module):
+    """
+    Transformer Layer
+
+    Using pre-layer-normalization: https://arxiv.org/pdf/2002.04745.pdf
+    """
+
     def __init__(
         self,
-        dim,
-        dff_k=3,
-        num_layers=4,
-        num_heads=4,
-        dropout=0.1,
-        sizeSeq=1024,
-        abspos=True,
-        use_pos_emb=True,
+        dim: int = 512,
+        ffn_dim: int = 1536,
+        num_heads: int = 8,
+        ffn_activation: str = "GELU",
+        dropout: float = 0.1,
+        position_emb: bool = False,
+    ):
+        super().__init__()
+        self.ln_multihead = nn.LayerNorm(dim)
+        self.ln_ffnetwork = nn.LayerNorm(dim)
+        self.dropout = nn.Dropout(p=dropout)
+
+        if position_emb:
+            self.multihead = MultiHeadAttention(
+                dim=dim, num_heads=num_heads, dropout=dropout
+            )
+        else:
+            self.multihead = MultiHeadAttentionAlibi(
+                dim=dim, num_heads=num_heads, dropout=dropout
+            )
+        self.ffnetwork = ffn_block(
+            dim, ffn_dim, activation=ffn_activation, dropout=dropout
+        )
+
+    def post_layer_norm_forward(
+        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Not used but kept here for reference"""
+        h, attn = self.multihead(Q=x, K=x, V=x, mask=mask)
+        h = self.ln_multihead(x + h)
+        h = self.ln_ffnetwork(h + self.ffnetwork(h))
+        return h, attn
+
+    def forward(
+        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        h = self.ln_multihead(x)
+        h, attn = self.multihead(Q=h, K=h, V=h, mask=mask)
+        h = x + self.dropout(h)
+        h = x + h
+        h = h + self.dropout(self.ffnetwork(self.ln_ffnetwork(h)))
+        return h, attn
+
+
+class GPT(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        dff_k: int = 3,
+        num_layers: int = 4,
+        num_heads: int = 4,
+        activation: str = "GELU",
+        dropout: float = 0.1,
+        use_pos_emb: bool = False,  # False -> Alibi
+        max_context: int = 1024,
     ):
         super().__init__()
         self.dim = dim
         self.dff = int(dim * dff_k)
         self.num_layers = num_layers
         self.num_heads = num_heads
-        self.sizeSeq = sizeSeq
-        self.abspos = abspos
+        self.activation = activation
         self.dropout = dropout
-
         self.use_pos_emb = use_pos_emb
 
-        self.model = self._build_model()
-
-    def _build_model(self):
-        net = []
         if self.use_pos_emb:
-            net.append(StaticPositionEmbedding(self.sizeSeq, self.dim))
+            self.max_context = max_context
+            self.pos_emb = StaticPositionEmbedding(max_context, self.dim)
+        else:
+            self.pos_emb = nn.Identity()
+
+        layers = []
         for _ in range(self.num_layers):
-            net.append(
+            layers.append(
                 TransformerLayer(
-                    sizeSeq=self.sizeSeq,
-                    dmodel=self.dim,
-                    dff=self.dff,
+                    dim=self.dim,
+                    ffn_dim=self.dff,
+                    num_heads=self.num_heads,
+                    ffn_activation=self.activation,
                     dropout=self.dropout,
-                    nheads=self.num_heads,
-                    abspos=self.abspos,
+                    position_emb=self.use_pos_emb,
                 )
             )
-        return nn.Sequential(*net)
+        self.layers = nn.ModuleList(layers)
+        self.apply(self._init_weights)
 
-    def forward(self, x):
-        if x.shape[1] > self.sizeSeq:
-            raise IndexError(
-                f"input is longer than maximum sequence length! x: {x.shape} > {self.sizeSeq}"
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.zeros_(module.bias)
+            torch.nn.init.ones_(module.weight)
+
+    def forward(self, x, attention=False):
+        all_attention = []
+
+        x = self.pos_emb(x)
+        for layer in self.layers:
+            x, attn = layer(x)
+            if attention:
+                all_attention.append(attn)
+
+        if attention:
+            attn = torch.stack(all_attention, dim=1)
+            return x, attn
+
+        return x
+
+
+def _test_gpt():
+    import matplotlib.pyplot as plt
+
+    model = GPT(dim=256, dff_k=3, num_layers=4, num_heads=8)
+    x = torch.rand((4, 20, model.dim))
+    with torch.no_grad():
+        z, attn = model(x, attention=True)
+    print("z: ", tuple(z.shape))
+    print("attn: ", tuple(attn.shape))
+    b = 0
+    fig, ax = plt.subplots(
+        model.num_heads, model.num_layers, sharex=True, sharey=True, figsize=(12, 12)
+    )
+    for n_layer in range(model.num_layers):
+        for n_head in range(model.num_heads):
+            ax[n_head, n_layer].imshow(
+                attn[b, n_layer, n_head],
+                aspect="auto",
+                origin="upper",
+                interpolation="none",
+                vmin=0,
+                vmax=1,
+                cmap="viridis",
             )
-        return self.model(x)
-
-
-def buildTransformerAR(
-    dimEncoded,  # Output dimension of the encoder
-    nLayers,  # Number of transformer layers
-    sizeSeq,  # Expected size of the input sequence
-    abspos,
-):
-    layerSequence = []
-    if abspos:
-        layerSequence += [StaticPositionEmbedding(sizeSeq, dimEncoded)]
-
-    for _ in range(nLayers):
-        layerSequence += [
-            TransformerLayer(sizeSeq=sizeSeq, dmodel=dimEncoded, abspos=abspos)
-        ]
-    return nn.Sequential(*layerSequence)
+            if n_layer == 0:
+                ax[n_head, n_layer].set_ylabel(f"Head {n_head}")
+            if n_head == 0:
+                ax[n_head, n_layer].set_title(f"Layer {n_layer}")
+    ax[0, 0].set_xticks([])
+    ax[0, 0].set_yticks([])
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
 
-    model = CausalTransformer(dim=32, num_layers=1, num_heads=2)
-    x = torch.randint(0, 256, (4, 599, 32))
-    y = model(x)
+    _test_gpt()

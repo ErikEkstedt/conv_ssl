@@ -1,0 +1,38 @@
+{
+  "student": {
+    "short": "Are you a student?",
+    "long": "Are you a student here at this university?"
+  },
+  "psychology": {
+    "short": "Do you study psychology?",
+    "long": "Do you study psychology here at this university?"
+  },
+  "first_year": {
+    "short": "Are you a first year student?",
+    "long": "Are you a first year student here at this university?"
+  },
+  "basketball": {
+    "short": "So do you play basketball?",
+    "long": "So do you play basketball on Thursdays?"
+  },
+  "experiment": {
+    "short": "Have you participated in any experiments before?",
+    "long": "Have you participated in any experiments before here at this university?"
+  },
+  "live": {
+    "short": "Do you live by yourself?",
+    "long": "Do you live by yourself or with someone else?"
+  },
+  "work": {
+    "short": "So you work on the side?",
+    "long": "So you work on the side in a supermarket in addition to your studies?"
+  },
+  "bike": {
+    "short": "Did you come here by bike?",
+    "long": "Did you come here by bike this morning?"
+  },
+  "drive": {
+    "short": "So did you drive here?",
+    "long": "So did you drive here this morning?"
+  }
+}

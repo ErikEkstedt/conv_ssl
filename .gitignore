@@ -144,3 +144,8 @@ pyrightconfig.json
 *.lock
 *.mp4
 *.avi
+.jekyll*
+_site/
+.streamlit/
+.sass*
+

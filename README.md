@@ -1,11 +1,6 @@
 # Continuous Conversational SSL
 
-Model training for the paper [Voice Activity Projection: Self-supervised Learning of Turn-taking Events]() using [pytorch_lightning](https://pytorch-lightning.readthedocs.io/en/latest/).
-
-* [vap_turn_taking](https://github.com/ErikEkstedt/vap_turn_taking)
-  - A model agnostic module used for Voice Activity Projection
-* [datasets_turntaking](https://github.com/ErikEkstedt/datasets_turntaking)
-  - WARNING: Requires [Switchboard](https://catalog.ldc.upenn.edu/LDC97S62) audio files
+Model training for the paper [Voice Activity Projection: Self-supervised Learning of Turn-taking Events](https://arxiv.org/abs/2205.09812).
 
 
 ## Installation
@@ -13,57 +8,72 @@ Model training for the paper [Voice Activity Projection: Self-supervised Learnin
 * Create conda env: `conda create -n conv_ssl python=3.9`
   - source env: `conda source conv_ssl`
 * PyTorch: `conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch`
-* Dependencies: `pip install -r requirements.txt`
-* install conv_ssl: `pip install -e .`
-* **DATASET**
-  - WARNING: Requires [Switchboard](https://catalog.ldc.upenn.edu/LDC97S62) audio files
-  * Install [datasets_turntaking](https://github.com/ErikEkstedt/datasets_turntaking)
-    - clone repo `git clone https://github.com/ErikEkstedt/datasets_turntaking.git`
-    - cd to repo, and install dependencies: `pip install -r requirements.txt`
-    - install repo: `pip install -e .`
+* Dependencies: 
+  * Install requirements: `pip install -r requirements.txt`
+  * **NOTE:** If you have problems install `pip install cython` manually first and then run the `pip install -r requirements.txt` command (trouble automating the install of the [CPC_audio](https://github.com/facebookresearch/CPC_audio) repo).
+    * [Optional] Manual installation of [CPC_audio](https://github.com/facebookresearch/CPC_audio) (if the note above does not work)
+      * `git clone https://github.com/facebookresearch/CPC_audio.git`
+      * cd to repo and install dependencies (see repository) but probably you'll need
+        * `pip install cython`
+      * run: `python setup.py develop`  (again see original implementation)
+  * **VAP**: Voice Activity Projection multi-purpose "head".
+    * Install [`vap_turn_taking`](https://github.com/ErikEkstedt/vap_turn_taking)
+      * `git clone https://github.com/ErikEkstedt/vap_turn_taking.git`
+      * cd to repo, and install dependencies: `pip install -r requirements.txt`
+      * Install: `pip install -e .`
+  * **DATASET**
+    * Install [datasets_turntaking](https://github.com/ErikEkstedt/datasets_turntaking)
+      * `git clone https://github.com/ErikEkstedt/datasets_turntaking.git`
+      * cd to repo, and install dependencies: `pip install -r requirements.txt`
+      * Install repo: `pip install -e .`
+    * **WARNING:** Requires [Switchboard](https://catalog.ldc.upenn.edu/LDC97S62) and/or [Fisher](https://catalog.ldc.upenn.edu/LDC2004S13) data!
+* Install **`conv_ssl`:** 
+  * cd to root directory and run: `pip install -e .`
 
-## Pretrained Encoders
-The pretrained encoder checkpoint is downloaded from the original repo (or from torch.hub through torchaudio).
-
-* [CPC](https://github.com/facebookresearch/CPC_audio)
-  - requires installation of source
-  - that is clone [CPC_audio](https://github.com/facebookresearch/CPC_audio)
-    - cd to repo
-    - Install dependencies (see repository) but probably you'll need
-      - `pip install cython`
-    - run: `python setup.py develop`  (again see original implementation)
-  - **automatically** downloads checkpoints
-
-## Docker
-* Requires [Nvidia-Docker]() for gpu support.
-  * [Nvidia Docker Github](https://github.com/NVIDIA/nvidia-docker)
-  * [github.io docs](https://nvidia.github.io/nvidia-docker/)
-  * [Installation Guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker)
-* sudo may be required for default setup. That is add `sudo` before each of the commands below.
-* Build Base (torchaudio was difficult): `docker build -f docker/Dockerfile_base -t vap_base .`
-* Build: `docker build . -t vap`
-* Run: `docker run --rm -it --gpus all -v=$(pwd)/assets:/workspace/assets -v=$HOME/projects/data:/root/projects/data vap`
-* Used during debug + some training:
-  * Add current directory (if changing code)
-  * Run: `docker run --rm -it --gpus all -v=$(pwd):/workspace -v=$HOME/projects/data:/root/projects/data vap`
-
+### Train
 
 ```bash
-
-# takes time but installs torch/torchaudio etc + CPC model repository
-
-docker build -f docker/Dockerfile_base -t vap_base .
-
-# using the image above and installs VAP repos
-# vap_turn_taking
-# datasets_turntaking
-# This repo
-
-docker build . -t vap
-
-# start docker (must include path to audio e.g. `$HOME/projects/data` in our case)
-docker run --rm -it --gpus all -v=$(pwd)/assets:/workspace/assets -v=$HOME/projects/data:/root/projects/data vap
+python conv_ssl/train.py data.datasets=['switchboard','fisher'] +trainer.val_check_interval=0.5 early_stopping.patience=20
 ```
+
+### Evaluate
+
+```bash
+python conv_ssl/evaluation/evaluation.py \
+  +checkpoint_path=/full/path/checkpoint.ckpt \
+  +savepath=assets/vap_fis \
+  data.num_workers=4 \
+  data.batch_size=16 
+```
+
+
+### Run
+
+The `run.py` script loads a pretrained model and evaluates on a sample (waveform + `text_grid_name.TextGrid` or `vad_list_name.json`). See `examples` folder for format etc.
+
+* Using defaults: `python run.py`
+* Custom run requires a audio file `sample.wav` and **either** a `text_grid_name.TextGrid` or `vad_list_name.json`
+  ```bash
+  python run.py \
+    -c example/cpc_48_50hz_15gqq5s5.ckpt \
+    -w example/student_long_female_en-US-Wavenet-G.wav \ # waveform
+    -tg example/student_long_female_en-US-Wavenet-G.TextGrid \ # text grid
+    -v example/vad_list.json \ # vad-list
+    -o VAP_OUTPUT.json  # output file
+  ```
+
+
+### Paper
+
+The paper investigates the performance over kfold splits (see `conv_ssl/config/swb_kfolds`) over 4 different model architectures ('discrete', 'independent', 'independent-40', 'comparative').
+* Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
+* train on samples on disk: `conv_ssl/train_disk.py` 
+* run `scripts/model_kfold.bash`
+* We evaluate (find threshold over validation set + final evaluation on test-set)
+  - see `conv_ssl/evaluation/evaluate_paper_model.py`
+  - the ids are the `WandB` ids.
+  - We save all model scores to disk
+* In `conv_ssl/evaluation/anova.py` we compare the scores to extract the final values in the paper.
 
 ## Experiments
 
@@ -110,53 +120,6 @@ metric_kwargs = event_settings['metric']
   }
 }
 ```
-
-### Train
-
-* Discrete
-    ```bash
-    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model.yaml
-    ```
-* Independent: similar to [Towards a General, Continuous Model of Turn-taking in Spoken Dialogue using LSTM Recurrent Neural Networks, Skantze](https://aclanthology.org/W17-5527/)
-  - Bins like 'discrete'.
-      ```bash
-      python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent.yaml
-      ```
-  - Independent-40: with similar bin count.
-      ```bash
-      python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/model_independent_baseline.yaml
-      ```
-* Comparative:
-    ```bash
-    python conv_ssl/train.py --gpus -1 --conf conv_ssl/config/comparative.yaml
-    ```
-* For faster training we saved all samples to disk and load directly
-  - Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
-  - train on samples on disk: `conv_ssl/train_disk.py` 
-  - SCRIPTS `conv_ssl/scripts`. Please look in script to get an idea of what they're doing...
-    - `scripts/model_kfold.bash` for kfold training in paper
-    - `scripts/test_models_script.bash` testing model training (`--fast_dev_run 1`)
-    - `scripts/train_script.bash` testing model training (`--fast_dev_run 1`)
-
-
-### Evaluate
-
-```bash
-python conv_ssl/evaluation/evaluation.py --checkpoint $PATH_TO_CHPT --savepath $PATH_TO_SAVEDIR --batch_size 4
-```
-
-### Paper
-
-We ran model using kfold splits (see `conv_ssl/config/swb_kfolds`) over 4 different model architectures ('discrete', 'independent', 'independent-40', 'comparative').
-
-* Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
-* train on samples on disk: `conv_ssl/train_disk.py` 
-* run `scripts/model_kfold.bash`
-* We evaluate (find threshold over validation set + final evaluation on test-set)
-  - see `conv_ssl/evaluation/evaluate_paper_model.py`
-  - the ids are the `WandB` ids.
-  - We save all model scores to disk
-* In `conv_ssl/evaluation/anova.py` we compare the scores to extract the final values in the paper.
 
 
 ## Citation

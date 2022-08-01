@@ -1,11 +1,10 @@
 from os import makedirs
 from os.path import join
-
 import torch
 from tqdm import tqdm
+
 from conv_ssl.model import VPModel
 from conv_ssl.utils import everything_deterministic
-
 from datasets_turntaking import DialogAudioDM
 
 everything_deterministic()

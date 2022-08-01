@@ -1,0 +1,4 @@
+bin_times: [.2, .4, .6, .8]
+type: 'discrete'
+pre_frames: 2
+bin_threshold: 0.5

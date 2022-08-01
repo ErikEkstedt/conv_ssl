@@ -65,7 +65,7 @@ def plot_vad_oh(
     colors=["b", "orange"],
     yticks=["B", "A"],
     ylabel=None,
-    alpha=1,
+    alpha=1.0,
     label=(None, None),
     legend_loc="best",
     plot=False,

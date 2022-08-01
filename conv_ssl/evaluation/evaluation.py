@@ -1,67 +1,56 @@
-from os.path import join
-from os import makedirs, cpu_count
+from pathlib import Path
+from os.path import join, basename, dirname as dr
+from os import makedirs
+from omegaconf import DictConfig, OmegaConf
+import hydra
 
 import torch
-from pytorch_lightning import Trainer, Callback
+from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
 
+from conv_ssl.callbacks import SymmetricSpeakersCallback
 from conv_ssl.model import VPModel
-from conv_ssl.utils import everything_deterministic, write_json, read_json
-
+from conv_ssl.utils import (
+    everything_deterministic,
+    write_json,
+    read_json,
+    tensor_dict_to_json,
+)
 from datasets_turntaking import DialogAudioDM
-from vap_turn_taking import TurnTakingMetrics
 
-d = read_json("conv_ssl/config/event_settings.json")
-METRIC_CONF = d["metric"]
-HS_CONF = d["hs"]
-BC_CONF = d["bc"]
+# ugly path
+
+SAVEPATH = join(dr(dr(dr(__file__))), "assets/PaperB/eval")
 MIN_THRESH = 0.01  # minimum threshold limit for S/L, S-pred, BC-pred
 
 everything_deterministic()
 
-
-def tensor_dict_to_json(d):
-    new_d = {}
-    for k, v in d.items():
-        if isinstance(v, torch.Tensor):
-            v = v.tolist()
-        elif isinstance(v, dict):
-            v = tensor_dict_to_json(v)
-        new_d[k] = v
-    return new_d
+"""
+python conv_ssl/evaluation/evaluation.py \
+        +checkpoint_path=/FULL/PATH/TO/CHECKPOINT/checkpoint.ckpt \
+        data.num_workers=4 \
+        data.batch_size=10
+"""
 
 
-class SymmetricSpeakersCallback(Callback):
-    """
-    This callback "flips" the speakers such that we get a fair evaluation not dependent on the
-    biased speaker-order / speaker-activity
-
-    The audio is mono which requires no change.
-
-    The only change we apply is to flip the channels in the VAD-tensor and get the corresponding VAD-history
-    which is defined as the ratio of speaker 0 (i.e. vad_history_flipped = 1 - vad_history)
-    """
-
-    def get_symmetric_batch(self, batch):
-        """Appends a flipped version of the batch-samples"""
-        for k, v in batch.items():
-            if k == "vad":
-                flipped = torch.stack((v[..., 1], v[..., 0]), dim=-1)
-            elif k == "vad_history":
-                flipped = 1.0 - v
-            else:
-                flipped = v
-            if isinstance(v, torch.Tensor):
-                batch[k] = torch.cat((v, flipped))
-            else:
-                batch[k] = v + flipped
-        return batch
-
-    def on_test_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
-        batch = self.get_symmetric_batch(batch)
-
-    def on_val_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
-        batch = self.get_symmetric_batch(batch)
+def load_dm(model, cfg_dict, verbose=False):
+    data_conf = model.conf["data"]
+    data_conf["audio_mono"] = False
+    data_conf["datasets"] = cfg_dict["data"].get("datasets", data_conf["datasets"])
+    data_conf["batch_size"] = cfg_dict["data"].get(
+        "batch_size", data_conf["batch_size"]
+    )
+    data_conf["num_workers"] = cfg_dict["data"].get(
+        "num_workers", data_conf["num_workers"]
+    )
+    if verbose:
+        print("Num Workers: ", data_conf["num_workers"])
+        print("Batch size: ", data_conf["batch_size"])
+        print("Mono: ", data_conf["audio_mono"])
+        print("datasets: ", data_conf["datasets"])
+    dm = DialogAudioDM(**data_conf)
+    dm.prepare_data()
+    dm.setup("test")
 
 
 def test(model, dloader, max_batches=None, project="VPModelTest", online=False):
@@ -193,16 +182,11 @@ def find_threshold(model, dloader, min_thresh=0.01):
         return ts[best_idx]
 
     # Init metric:
-    model.test_metric = TurnTakingMetrics(
-        hs_kwargs=HS_CONF,
-        bc_kwargs=BC_CONF,
-        metric_kwargs=METRIC_CONF,
+    model.test_metric = model.init_metric(
         bc_pred_pr_curve=True,
         shift_pred_pr_curve=True,
         long_short_pr_curve=True,
-        frame_hz=model.frame_hz,
     )
-    model.test_metric.to(model.device)
 
     # Find Thresholds
     _ = test(model, dloader, online=False)
@@ -254,64 +238,74 @@ def find_threshold(model, dloader, min_thresh=0.01):
     return thresholds, predictions, curves
 
 
-def evaluate(checkpoint_path, savepath, batch_size, num_workers):
+@hydra.main(config_path="../conf", config_name="config")
+def evaluate(cfg: DictConfig) -> None:
     """Evaluate model"""
+    cfg_dict = OmegaConf.to_object(cfg)
+    cfg_dict = dict(cfg_dict)
 
     # Load model
-    model = VPModel.load_from_checkpoint(checkpoint_path, strict=False)
+    model = VPModel.load_from_checkpoint(cfg.checkpoint_path, strict=False)
     model = model.eval()
     if torch.cuda.is_available():
         model = model.to("cuda")
 
+    savepath = join(SAVEPATH, basename(cfg.checkpoint_path).replace(".ckpt", ""))
+    savepath += "_" + "_".join(cfg.data.datasets)
+    Path(savepath).mkdir(exist_ok=True, parents=True)
+
     # Load data
-    data_conf = DialogAudioDM.load_config()
-    DialogAudioDM.print_dm(data_conf)
-    print("Num Workers: ", num_workers)
-    print("Batch size: ", batch_size)
+    print("Num Workers: ", cfg.data.num_workers)
+    print("Batch size: ", cfg.data.batch_size)
+    print(cfg.data.datasets)
     dm = DialogAudioDM(
-        datasets=data_conf["dataset"]["datasets"],
-        type=data_conf["dataset"]["type"],
-        audio_duration=data_conf["dataset"]["audio_duration"],
-        audio_normalize=data_conf["dataset"]["audio_normalize"],
-        audio_overlap=data_conf["dataset"]["audio_overlap"],
-        sample_rate=data_conf["dataset"]["sample_rate"],
+        datasets=cfg.data.datasets,
+        type=cfg.data.type,
+        audio_duration=cfg.data.audio_duration,
+        audio_normalize=cfg.data.audio_normalize,
+        audio_overlap=cfg.data.audio_overlap,
+        sample_rate=cfg.data.sample_rate,
         vad_hz=model.frame_hz,
         vad_horizon=model.VAP.horizon,
-        vad_history=data_conf["dataset"]["vad_history"],
-        vad_history_times=data_conf["dataset"]["vad_history_times"],
+        vad_history=cfg.data.vad_history,
+        vad_history_times=cfg.data.vad_history_times,
         flip_channels=False,
-        batch_size=batch_size,
-        num_workers=num_workers,
+        batch_size=cfg.data.batch_size,
+        num_workers=cfg.data.num_workers,
     )
     dm.prepare_data()
     dm.setup(None)
-    makedirs(savepath, exist_ok=True)
 
     # Threshold
     # Find the best thresholds (S-pred, BC-pred, S/L) on the validation set
-    print("#" * 60)
-    print("Finding Thresholds (val-set)...")
-    print("#" * 60)
-    thresholds, prediction, curves = find_threshold(
-        model, dm.val_dataloader(), min_thresh=MIN_THRESH
-    )
-    torch.save(prediction, join(savepath, "predictions.pt"))
-    torch.save(curves, join(savepath, "curves.pt"))
+    threshold_path = cfg.get("thresholds", None)
+    if threshold_path is None:
+        print("#" * 60)
+        print("Finding Thresholds (val-set)...")
+        print("#" * 60)
+        thresholds, prediction, curves = find_threshold(
+            model, dm.val_dataloader(), min_thresh=MIN_THRESH
+        )
+
+        th = {k: v.item() for k, v in thresholds.items()}
+        write_json(th, join(savepath, "thresholds.json"))
+        torch.save(prediction, join(savepath, "predictions.pt"))
+        torch.save(curves, join(savepath, "curves.pt"))
+        print("Saved Thresholds -> ", join(savepath, "thresholds.json"))
+        print("Saved Curves -> ", join(savepath, "curves.pt"))
+    else:
+        print("Loading thresholds: ", threshold_path)
+        thresholds = read_json(threshold_path)
 
     # Score
     print("#" * 60)
     print("Final Score (test-set)...")
     print("#" * 60)
-    model.test_metric = TurnTakingMetrics(
-        hs_kwargs=HS_CONF,
-        bc_kwargs=BC_CONF,
-        metric_kwargs=METRIC_CONF,
+    model.test_metric = model.init_metric(
         threshold_pred_shift=thresholds.get("pred_shift", 0.5),
         threshold_short_long=thresholds.get("short_long", 0.5),
         threshold_bc_pred=thresholds.get("pred_bc", 0.5),
-        frame_hz=model.frame_hz,
     )
-    model.test_metric.to(model.device)
     result = test(model, dm.test_dataloader(), online=False)[0]
     metrics = model.test_metric.compute()
 
@@ -320,25 +314,10 @@ def evaluate(checkpoint_path, savepath, batch_size, num_workers):
     metrics["threshold_pred_bc"] = thresholds["pred_bc"]
     metrics["threshold_short_long"] = thresholds["short_long"]
 
-    torch.save(metrics, join(savepath, "metric.pt"))
     metric_json = tensor_dict_to_json(metrics)
     write_json(metric_json, join(savepath, "metric.json"))
-    return metrics, prediction, curves
+    print("Saved metrics -> ", join(savepath, "metric.pt"))
 
 
 if __name__ == "__main__":
-    from argparse import ArgumentParser
-
-    parser = ArgumentParser()
-    parser.add_argument("--checkpoint", type=str)
-    parser.add_argument("--savepath", type=str, default="assets")
-    parser.add_argument("--batch_size", type=int, default=16)
-    args = parser.parse_args()
-
-    # Saves all scores to `savepath`
-    metrics, prediction, curves = evaluate(
-        args.checkpoint,
-        savepath=args.savepath,
-        batch_size=args.batch_size,
-        num_workers=cpu_count(),
-    )
+    evaluate()

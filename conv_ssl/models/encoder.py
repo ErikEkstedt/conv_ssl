@@ -1,15 +1,20 @@
-from os.path import join
-
 import torch
 import torch.nn as nn
 import einops
+from einops.layers.torch import Rearrange
 
 from conv_ssl.models.cpc_base_model import load_CPC
-from conv_ssl.utils import load_config, repo_root
+from conv_ssl.models.cnn import CConv1d, LayerNorm
 
-DEFAULT_CONFIG = join(repo_root(), "conv_ssl/config/model.yaml")
-MODEL_HZ = {"cpc": 100}
-MODEL_DIM = {"cpc": 256}
+
+def get_cnn_layer(dim, kernel, stride, dilation, activation):
+    layers = [Rearrange("b t d -> b d t")]
+    for k, s, d in zip(kernel, stride, dilation):
+        layers.append(CConv1d(dim, dim, kernel_size=k, stride=s, dilation=d))
+        layers.append(LayerNorm(dim))
+        layers.append(getattr(torch.nn, activation)())
+    layers.append(Rearrange("b d t -> b t d"))
+    return nn.Sequential(*layers)
 
 
 class Encoder(nn.Module):
@@ -23,40 +28,38 @@ class Encoder(nn.Module):
 
     def __init__(self, conf, freeze=True):
         super().__init__()
-        self.conf = self.encoder_conf(conf)
-        self.name = self.conf["encoder"]["type"]
-        self.frame_hz = conf["encoder"]["frame_hz"]
-        self.encoder_layer = conf["encoder"]["output_layer"]
+        self.conf = conf
+        self.name = conf["name"]
+        self.frame_hz = conf["frame_hz"]
+        self.sample_rate = conf["sample_rate"]
+        self.encoder_layer = conf["output_layer"]
         self.encoder = load_CPC()
-        self.output_dim = 256
+        self.output_dim = self.encoder.gEncoder.conv4.out_channels
+
+        if conf.get("downsample", False):
+            down = conf["downsample"]
+            self.downsample = get_cnn_layer(
+                dim=self.output_dim,
+                kernel=down["kernel"],
+                stride=down["stride"],
+                dilation=down["dilation"],
+                activation=down["activation"],
+            )
+        else:
+            self.downsample = nn.Identity()
+
         if freeze:
             self.freeze()
-
-    def encoder_conf(self, conf):
-        enc_conf = {"encoder": conf["encoder"]}
-        enc_conf["quantizer"] = conf["quantizer"]
-        enc_conf["encoder"]["dim"] = MODEL_DIM[conf["encoder"]["type"]]
-        enc_conf["encoder"]["frame_hz"] = MODEL_HZ[conf["encoder"]["type"]]
-        return enc_conf
-
-    @staticmethod
-    def default_config_path():
-        return DEFAULT_CONFIG
-
-    @staticmethod
-    def load_config(path=None, args=None, format="dict"):
-        if path is None:
-            path = Encoder.default_config_path()
-        return load_config(path, args=args, format=format)
-
-    @staticmethod
-    def load_state_dict(path):
-        return torch.load(path)
 
     def freeze(self):
         for p in self.encoder.parameters():
             p.requires_grad_(False)
         print(f"Froze {self.__class__.__name__}!")
+
+    def unfreeze(self):
+        for p in self.encoder.parameters():
+            p.requires_grad_(True)
+        print(f"Trainable {self.__class__.__name__}!")
 
     def encode(self, waveform):
         if waveform.ndim < 3:
@@ -80,17 +83,25 @@ class Encoder(nn.Module):
 
     def forward(self, waveform):
         z = self.encode(waveform)
+        z = self.downsample(z)
         return {"z": z}
 
 
+def _test_encoder(config_name):
+    from conv_ssl.utils import load_hydra_conf
+
+    conf = load_hydra_conf(config_name=config_name)
+    econf = conf["model"]["encoder"]
+    enc = Encoder(econf, freeze=econf["freeze"])
+    x = torch.rand((4, econf["sample_rate"]))
+    out = enc(x)
+    z = out["z"]
+    print("Config: ", config_name)
+    print("x: ", tuple(x.shape))
+    print("z: ", tuple(z.shape))
+
+
 if __name__ == "__main__":
-
-    conf = Encoder.load_config()
-    conf["encoder"]["type"] = "cpc"
-    model = Encoder(conf)
-
-    sr = 16000
-    wav_input_16khz = torch.randn(1, sr * 10)
-
-    o = model(wav_input_16khz)
-    print("o['z']: ", tuple(o["z"].shape))
+    _test_encoder("model/discrete")
+    _test_encoder("model/discrete_20hz")
+    _test_encoder("model/discrete_50hz")
