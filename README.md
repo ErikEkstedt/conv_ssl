@@ -1,6 +1,8 @@
 # Continuous Conversational SSL
 
-Model training for the paper [Voice Activity Projection: Self-supervised Learning of Turn-taking Events](https://arxiv.org/abs/2205.09812).
+Model training for 
+* [Voice Activity Projection: Self-supervised Learning of Turn-taking Events](https://arxiv.org/abs/2205.09812) 
+* [How Much Does Prosody Help Turn-taking? Investigations using Voice Activity Projection Models]()
 
 
 ## Installation
