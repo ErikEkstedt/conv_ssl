@@ -1,5 +1,5 @@
 defaults:
-  - model: discrete
+  - model: discrete_50hz
   - events: events
 
 seed: 1

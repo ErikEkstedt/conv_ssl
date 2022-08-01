@@ -1,160 +1,123 @@
-# from os.path import join, split, basename
-from argparse import ArgumentParser
+from omegaconf import DictConfig, OmegaConf
 from os import makedirs, environ
-
-import torch
-import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-
-from datasets_turntaking import DialogAudioDM
-from conv_ssl.model import VPModel
-from conv_ssl.utils import count_parameters, everything_deterministic
-
+import hydra
 import wandb
 
-PROJECT = "VPModel"
-SAVEDIR = "runs/VPModel"
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import (
+    ModelCheckpoint,
+    EarlyStopping,
+    LearningRateMonitor,
+    StochasticWeightAveraging,
+)
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
+from conv_ssl.callbacks import WandbArtifactCallback
+from conv_ssl.model import VPModel
+from conv_ssl.utils import everything_deterministic
+from datasets_turntaking import DialogAudioDM
+
 
 everything_deterministic()
 
 
-class WandbArtifactCallback(pl.Callback):
-    def upload(self, trainer):
-        run = trainer.logger.experiment
-        print(f"Ending run: {run.id}")
-        artifact = wandb.Artifact(f"{run.id}_model", type="model")
-        for path, val_loss in trainer.checkpoint_callback.best_k_models.items():
-            print(f"Adding artifact: {path}")
-            artifact.add_file(path)
-        run.log_artifact(artifact)
+@hydra.main(config_path="conf", config_name="config")
+def train(cfg: DictConfig) -> None:
+    cfg_dict = OmegaConf.to_object(cfg)
+    cfg_dict = dict(cfg_dict)
 
-    def on_train_end(self, trainer, pl_module):
-        print("Training End ---------------- Custom Upload")
-        self.upload(trainer)
+    if "debug" in cfg_dict:
+        environ["WANDB_MODE"] = "offline"
+        print("DEBUG -> OFFLINE MODE")
 
-    def on_exception(self, trainer, pl_module, exception):
-        if isinstance(exception, KeyboardInterrupt):
-            print("Keyboard Interruption ------- Custom Upload")
-            self.upload(trainer)
-
-
-def train():
-    parser = ArgumentParser()
-    parser = VPModel.add_model_specific_args(parser)
-    parser = DialogAudioDM.add_data_specific_args(parser)
-    parser = pl.Trainer.add_argparse_args(parser)
-    parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--name_info", type=str, default="")
-    parser.add_argument("--project_info", type=str, default="")
-    parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--log_gradients", action="store_true")
-    parser.add_argument("--animation", action="store_true")
-    parser.add_argument("--animation_epoch_start", default=10, type=int)
-    parser.add_argument("--animation_n", default=10, type=int)
-    args = parser.parse_args()
-    pl.seed_everything(args.seed)
-    args.deterministic = True
-
+    pl.seed_everything(cfg_dict["seed"])
     local_rank = environ.get("LOCAL_RANK", 0)
 
-    #########
-    # Model #
-    #########
-    conf = VPModel.load_config(path=args.conf, args=args)
-    model = VPModel(conf)
+    model = VPModel(cfg_dict)
 
-    # print after callbacks/wandb init
-    if local_rank == 0:
-        print("-" * 60)
-        print(model.summary())
-        print(f"Model Name: {model.run_name}")
-        print("Base: ", args.conf)
-        print("PARAMETERS: ", count_parameters(model))
-        print()
-        print("-" * 60)
+    if cfg_dict["verbose"]:
+        print("DataModule")
+        for k, v in cfg_dict["data"].items():
+            print(f"{k}: {v}")
+        print("#" * 60)
 
-    ##############
-    # DataModule #
-    ##############
-    data_conf = DialogAudioDM.load_config(path=args.data_conf, args=args)
-    # Update the data to match MODEL Frame rate (Hz)
-    data_conf["dataset"]["vad_hz"] = model.frame_hz
-
-    # rounding error ?
-    data_conf["dataset"]["vad_horizon"] = round(
-        sum(conf["vad_projection"]["bin_times"]), 2
-    )
-    if local_rank == 0:
-        DialogAudioDM.print_dm(data_conf, args)
-
-    dm = DialogAudioDM(
-        datasets=data_conf["dataset"]["datasets"],
-        type=data_conf["dataset"]["type"],
-        audio_duration=data_conf["dataset"]["audio_duration"],
-        audio_normalize=data_conf["dataset"]["audio_normalize"],
-        audio_overlap=data_conf["dataset"]["audio_overlap"],
-        sample_rate=data_conf["dataset"]["sample_rate"],
-        vad_hz=data_conf["dataset"]["vad_hz"],
-        vad_horizon=data_conf["dataset"]["vad_horizon"],
-        vad_history=data_conf["dataset"]["vad_history"],
-        vad_history_times=data_conf["dataset"]["vad_history_times"],
-        train_files=args.train_files,
-        val_files=args.val_files,
-        test_files=args.test_files,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-    )
+    dm = DialogAudioDM(**cfg_dict["data"])
     dm.prepare_data()
 
-    # Callbacks & Logger
-    logger = None
-    callbacks = []
-
-    # this should be handled automatically with pytorch_lightning?
-    if not args.fast_dev_run:
-
-        makedirs(SAVEDIR, exist_ok=True)
+    if cfg_dict["trainer"]["fast_dev_run"]:
+        trainer = pl.Trainer(**cfg_dict["trainer"])
+        trainer.fit(model, datamodule=dm)
+    else:
+        # Callbacks & Logger
         logger = WandbLogger(
-            save_dir=SAVEDIR,
-            project=PROJECT + args.project_info,
-            name=model.run_name + args.name_info,
-            log_model=not args.dont_log_model,
-            # log_model=True,  # True: logs after training finish
+            # save_dir=SA,
+            project=cfg_dict["wandb"]["project"],
+            name=model.run_name,
+            log_model=False,
         )
 
-        callbacks.append(
-            ModelCheckpoint(
-                mode="max",
-                monitor="val_f1_weighted",
-                # mode="min",
-                # monitor="val_loss",
-            )
-        )
-        callbacks.append(WandbArtifactCallback())
-        verbose = False
         if local_rank == 0:
-            print(f"Early stopping (patience={args.patience})")
-            verbose = True
+            print("#" * 40)
+            print(f"Early stopping (patience={cfg_dict['early_stopping']['patience']})")
+            print("#" * 40)
 
-        callbacks.append(
+        callbacks = [
+            ModelCheckpoint(
+                mode=cfg_dict["checkpoint"]["mode"],
+                monitor=cfg_dict["checkpoint"]["monitor"],
+            ),
             EarlyStopping(
-                monitor="val_f1_weighted",
-                mode="max",
-                patience=args.patience,
+                monitor=cfg_dict["early_stopping"]["monitor"],
+                mode=cfg_dict["early_stopping"]["mode"],
+                patience=cfg_dict["early_stopping"]["patience"],
                 strict=True,  # crash if "monitor" is not found in val metrics
-                verbose=verbose,
+                verbose=False,
+            ),
+            LearningRateMonitor(),
+            WandbArtifactCallback(),
+        ]
+
+        if cfg_dict["optimizer"].get("swa_enable", False):
+            callbacks.append(
+                StochasticWeightAveraging(
+                    swa_epoch_start=cfg_dict["optimizer"].get("swa_epoch_start", 5),
+                    annealing_epochs=cfg_dict["optimizer"].get(
+                        "swa_annealing_epochs", 10
+                    ),
+                )
             )
+
+        # Find Best Learning Rate
+        trainer = pl.Trainer(gpus=-1)
+        lr_finder = trainer.tuner.lr_find(model, dm)
+        model.learning_rate = lr_finder.suggestion()
+        print("#" * 40)
+        print("Initial Learning Rate: ", model.learning_rate)
+        print("#" * 40)
+
+        # Actual Training
+        trainer = pl.Trainer(
+            logger=logger,
+            callbacks=callbacks,
+            strategy=DDPStrategy(find_unused_parameters=True),
+            **cfg_dict["trainer"],
         )
+        trainer.fit(model, datamodule=dm)
 
-    # Trainer
-    # args.auto_lr_find = True
-    trainer = pl.Trainer.from_argparse_args(
-        args=args, logger=logger, callbacks=callbacks
-    )
-    # auto_finder = trainer.tune(model, dm)["lr_find"]
 
-    trainer.fit(model, datamodule=dm)
+def load():
+    # from conv_ssl.evaluation.utils import load_model
+    # checkpoint = "runs/TestHydra/223srezy/checkpoints/epoch=4-step=50.ckpt"
+    # model = VPModel.load_from_checkpoint(checkpoint)
+    run = wandb.init()
+    artifact = run.use_artifact("how_so/TestHydra/3hjsv2z8_model:v0", type="model")
+    artifact_dir = artifact.download()
+    checkpoint = artifact_dir + "/model"
+    print("artifact_dir: ", artifact_dir)
+    # run_path = "how_so/TestHydra/3hjsv2z8"
+    # model = load_model(run_path=run_path)
+    #
+    # print(model)
 
 
 if __name__ == "__main__":

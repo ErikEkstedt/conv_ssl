@@ -147,4 +147,5 @@ pyrightconfig.json
 .jekyll*
 _site/
 .streamlit/
+.sass*
 
