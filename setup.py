@@ -9,5 +9,5 @@ setup(
     author="erikekst",
     author_email="erikekst@kth.se",
     url="https://github.com/ErikEkstedt/conv_ssl",
-    packages=["conv_ssl"],
+    packages=["conv_ssl", "conv_ssl.models", "conv_ssl.evaluation"],
 )
