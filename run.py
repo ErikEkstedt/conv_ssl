@@ -88,7 +88,7 @@ if __name__ == "__main__":
             "frame_hz": model.frame_hz,
             "checkpoint": args.checkpoint,
         },
-        "va": sample["vad"].tolist(),
+        "va": vad_list,
     }
 
     if tg is not None:
