@@ -48,7 +48,7 @@ data:
   # VAD
   vad_hz: ${model.encoder.frame_hz}
   vad_horizon: 2
-  vad_history: true
+  vad_history: ${model.va_cond.history}
   vad_history_times: [60, 30, 10, 5]
   # Data
   train_files: null

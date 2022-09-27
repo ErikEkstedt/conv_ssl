@@ -139,10 +139,10 @@ class ProjectionModel(nn.Module):
 
         # Vad conditioning
         # Also Ugly...
-        vc = self.vad_condition(va, va_history)
+        vc = self.vad_condition(va, va_history)[:, : z.shape[1]]
 
         # Add vad-conditioning to audio features
-        z = z + vc[:, : z.shape[1]]
+        z = z + vc
 
         # Autoregressive
         z = self.ar(z)["z"]
@@ -505,6 +505,20 @@ def _test_model():
     model = VPModel(conf)
     model.val_metric = model.init_metric()
     ss = model.val_metric.hs.stat_scores
+
+
+def _test_stereo():
+    from conv_ssl.utils import load_hydra_conf
+
+    # TODO:
+    # [ ] Train regular model without VA-history on longer context ?
+    # [ ] Datasets stereo condition
+    # [ ] ProjectionModel stereo mode
+    # [ ] No voice activity input (history and VA)
+    conf = load_hydra_conf()
+
+    model = VPModel(conf)
+    model.val_metric = model.init_metric()
 
 
 if __name__ == "__main__":
