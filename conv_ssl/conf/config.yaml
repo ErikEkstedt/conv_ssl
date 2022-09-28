@@ -41,7 +41,7 @@ data:
   datasets: ["switchboard", "fisher"]
   type: "sliding"
   sample_rate: ${model.encoder.sample_rate}
-  audio_mono: true
+  audio_mono: ${model.encoder.mono}
   audio_duration: 10
   audio_normalize: true
   audio_overlap: 1

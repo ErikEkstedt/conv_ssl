@@ -47,6 +47,8 @@ class TransformerLayer(nn.Module):
     Transformer Layer
 
     Using pre-layer-normalization: https://arxiv.org/pdf/2002.04745.pdf
+
+    Inspiration: https://nn.labml.ai/transformers/models.html
     """
 
     def __init__(
@@ -57,42 +59,46 @@ class TransformerLayer(nn.Module):
         ffn_activation: str = "GELU",
         dropout: float = 0.1,
         position_emb: bool = False,
+        cross_attention: bool = False,
     ):
         super().__init__()
-        self.ln_multihead = nn.LayerNorm(dim)
+        self.ln_self_attn = nn.LayerNorm(dim)
         self.ln_ffnetwork = nn.LayerNorm(dim)
+        if cross_attention:
+            self.ln_src_attn = nn.LayerNorm(dim)
         self.dropout = nn.Dropout(p=dropout)
+        self.cross_attention = cross_attention
 
-        if position_emb:
-            self.multihead = MultiHeadAttention(
-                dim=dim, num_heads=num_heads, dropout=dropout
-            )
-        else:
-            self.multihead = MultiHeadAttentionAlibi(
-                dim=dim, num_heads=num_heads, dropout=dropout
-            )
+        MHA = MultiHeadAttention if position_emb else MultiHeadAttentionAlibi
+
+        self.multihead = MHA(dim=dim, num_heads=num_heads, dropout=dropout)
+        if cross_attention:
+            self.src_multihead = MHA(dim=dim, num_heads=num_heads, dropout=dropout)
+
         self.ffnetwork = ffn_block(
             dim, ffn_dim, activation=ffn_activation, dropout=dropout
         )
 
-    def post_layer_norm_forward(
-        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Not used but kept here for reference"""
-        h, attn = self.multihead(Q=x, K=x, V=x, mask=mask)
-        h = self.ln_multihead(x + h)
-        h = self.ln_ffnetwork(h + self.ffnetwork(h))
-        return h, attn
-
     def forward(
-        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        h = self.ln_multihead(x)
-        h, attn = self.multihead(Q=h, K=h, V=h, mask=mask)
-        h = x + self.dropout(h)
-        h = x + h
-        h = h + self.dropout(self.ffnetwork(self.ln_ffnetwork(h)))
-        return h, attn
+        self,
+        x: torch.Tensor,
+        src: Optional[torch.Tensor] = None,
+        mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+
+        z = self.ln_self_attn(x)
+        self_attn, attn_self = self.multihead(Q=z, K=z, V=z, mask=mask)
+
+        x = x + self.dropout(self_attn)
+
+        attn_cross = None
+        if self.cross_attention and src is not None:
+            z = self.ln_src_attn(x)
+            src_attn, attn_cross = self.src_multihead(Q=z, K=src, V=src, mask=mask)
+            x = x + self.dropout(src_attn)
+
+        x = x + self.dropout(self.ffnetwork(self.ln_ffnetwork(x)))
+        return x, attn_self, attn_cross
 
 
 class GPT(nn.Module):
@@ -106,6 +112,7 @@ class GPT(nn.Module):
         dropout: float = 0.1,
         use_pos_emb: bool = False,  # False -> Alibi
         max_context: int = 1024,
+        cross_attention: bool = False,
     ):
         super().__init__()
         self.dim = dim
@@ -115,6 +122,7 @@ class GPT(nn.Module):
         self.activation = activation
         self.dropout = dropout
         self.use_pos_emb = use_pos_emb
+        self.cross_attention = cross_attention
 
         if self.use_pos_emb:
             self.max_context = max_context
@@ -132,6 +140,7 @@ class GPT(nn.Module):
                     ffn_activation=self.activation,
                     dropout=self.dropout,
                     position_emb=self.use_pos_emb,
+                    cross_attention=self.cross_attention,
                 )
             )
         self.layers = nn.ModuleList(layers)
@@ -146,20 +155,75 @@ class GPT(nn.Module):
             torch.nn.init.zeros_(module.bias)
             torch.nn.init.ones_(module.weight)
 
-    def forward(self, x, attention=False):
+    def forward(
+        self,
+        x: torch.Tensor,
+        src: Optional[torch.Tensor] = None,
+        attention: bool = False,
+    ):
         all_attention = []
+        all_attention_cross = []
 
         x = self.pos_emb(x)
         for layer in self.layers:
-            x, attn = layer(x)
+            x, attn, cross_attn = layer(x, src=src)
             if attention:
                 all_attention.append(attn)
+                all_attention_cross.append(cross_attn)
 
         if attention:
             attn = torch.stack(all_attention, dim=1)
-            return x, attn
-
+            attn_cross = torch.stack(all_attention_cross, dim=1)
+            return x, attn, attn_cross
         return x
+
+
+# TODO: Add DGSLM Layer class
+class GPTStereo(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        dff_k: int = 3,
+        num_layers: int = 4,
+        num_heads: int = 4,
+        activation: str = "GELU",
+        dropout: float = 0.1,
+        use_pos_emb: bool = False,  # False -> Alibi
+        max_context: int = 1024,
+        cross_attention: bool = False,
+    ):
+
+        self.gpt = GPT(
+            dim=dim,
+            dff_k=dff_k,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            activation=activation,
+            dropout=dropout,
+            use_pos_emb=use_pos_emb,
+            max_context=max_context,
+            cross_attention=cross_attention,
+        )
+        self.combine = nn.Linear(dim * 2, dim)
+        self.ln_combine = nn.LayerNorm(dim)
+
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor, attention: bool = False):
+
+        if attention:
+            z1, attn_self1, attn_cross1 = self.gpt(x=x1, src=x2)
+            z2, attn_self2, attn_cross2 = self.gpt(x=x2, src=x1)
+            z = self.ln_combine(self.combine(torch.cat((z1, z2), dim=-1)))
+            return z, {
+                "attn_self1": attn_self1,
+                "attn_cross1": attn_cross1,
+                "attn_self2": attn_self2,
+                "attn_cross2": attn_cross2,
+            }
+        else:
+            z1 = self.gpt(x=x1, src=x2)
+            z2 = self.gpt(x=x2, src=x1)
+            z = self.ln_combine(self.combine(torch.cat((z1, z2), dim=-1)))
+        return z
 
 
 def _test_gpt():

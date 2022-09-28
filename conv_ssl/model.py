@@ -76,16 +76,36 @@ class ProjectionModel(nn.Module):
         super().__init__()
         self.conf = conf
 
+        self.mono = conf["encoder"]["mono"]
+
         # Audio Encoder
         freeze = conf["encoder"].get("freeze", True)
         self.encoder = Encoder(conf["encoder"], freeze=freeze)
 
         # VAD Conditioning
-        self.vad_condition = VadCondition(
-            self.encoder.output_dim,
-            va_history=conf["va_cond"]["history"],
-            va_history_bins=conf["va_cond"]["history_bins"],
-        )
+        if self.mono:
+            self.vad_condition = VadCondition(
+                self.encoder.output_dim,
+                va_history=conf["va_cond"]["history"],
+                va_history_bins=conf["va_cond"]["history_bins"],
+            )
+        else:
+            # stereo architecture
+            self.ar_channel = AR(
+                input_dim=self.encoder.output_dim,
+                dim=conf["ar"]["dim"],
+                num_layers=conf["ar"]["channel_layers"],
+                dropout=conf["ar"]["dropout"],
+                ar=conf["ar"]["type"],
+                transfomer_kwargs=dict(
+                    num_heads=conf["ar"]["num_heads"],
+                    dff_k=conf["ar"]["dff_k"],
+                    use_pos_emb=conf["ar"]["use_pos_emb"],
+                    max_context=conf["ar"].get("max_context", None),
+                    abspos=conf["ar"].get("abspos", None),
+                    sizeSeq=conf["ar"].get("sizeSeq", None),
+                ),
+            )
 
         # Autoregressive
         self.ar = AR(
@@ -132,17 +152,21 @@ class ProjectionModel(nn.Module):
         out = {}
 
         # Encode Audio
-        z = self.encode(waveform)
+        if self.mono:
+            z = self.encode(waveform)
 
-        # Ugly: sometimes you may get an extra frame from waveform encoding
-        z = z[:, : va.shape[1]]
+            # Ugly: sometimes you may get an extra frame from waveform encoding
+            z = z[:, : va.shape[1]]
 
-        # Vad conditioning
-        # Also Ugly...
-        vc = self.vad_condition(va, va_history)[:, : z.shape[1]]
+            # Vad conditioning... extra frames... Also Ugly...
+            vc = self.vad_condition(va, va_history)[:, : z.shape[1]]
 
-        # Add vad-conditioning to audio features
-        z = z + vc
+            # Add vad-conditioning to audio features
+            z = z + vc
+        else:
+            # Placeholder before defining architecture
+            z1 = self.encode(waveform[:, :1])
+            z = z1 + self.encode(waveform[:, 1:])
 
         # Autoregressive
         z = self.ar(z)["z"]
