@@ -7,6 +7,7 @@ from conv_ssl.utils import (
     write_json,
 )
 from conv_ssl.evaluation.duration import read_text_grid
+import torch
 
 everything_deterministic()
 
@@ -66,7 +67,9 @@ if __name__ == "__main__":
     print("Load Model: ", args.checkpoint)
     model = VPModel.load_from_checkpoint(args.checkpoint)
     model = model.eval()
-    _ = model.to("cuda")
+
+    if torch.cuda.is_available():
+        _ = model.to("cuda")
 
     print("Wavfile: ", args.wav)
     print("VA-list: ", args.voice_activity)
