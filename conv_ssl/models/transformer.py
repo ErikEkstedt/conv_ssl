@@ -62,6 +62,11 @@ class TransformerLayer(nn.Module):
         cross_attention: bool = False,
     ):
         super().__init__()
+        self.dim = dim
+        self.ffn_dim = ffn_dim
+        self.num_heads = num_heads
+        self.dropout = dropout
+
         self.ln_self_attn = nn.LayerNorm(dim)
         self.ln_ffnetwork = nn.LayerNorm(dim)
         if cross_attention:
@@ -178,7 +183,13 @@ class GPT(nn.Module):
         return x
 
 
-# TODO: Add DGSLM Layer class
+class TransformerStereoLayer(TransformerLayer):
+    def forward(self, x1, x2):
+        z1, _, _ = super().forward(x=x1, src=x2)
+        z2, _, _ = super().forward(x=x2, src=x1)
+        return z1, z2
+
+
 class GPTStereo(nn.Module):
     def __init__(
         self,
@@ -188,44 +199,62 @@ class GPTStereo(nn.Module):
         num_heads: int = 4,
         activation: str = "GELU",
         dropout: float = 0.1,
-        use_pos_emb: bool = False,  # False -> Alibi
-        max_context: int = 1024,
-        cross_attention: bool = False,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.dff = int(dim * dff_k)
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.activation = activation
+        self.dropout = dropout
+
+        layers = []
+        for _ in range(self.num_layers):
+            layers.append(
+                TransformerStereoLayer(
+                    dim=self.dim,
+                    ffn_dim=self.dff,
+                    num_heads=self.num_heads,
+                    ffn_activation=self.activation,
+                    dropout=self.dropout,
+                    position_emb=False,
+                    cross_attention=True,
+                )
+            )
+        self.layers = nn.ModuleList(layers)
+        self.combinator = nn.Linear(self.dim * 2, self.dim)
+        self.ln_combinator = nn.LayerNorm(self.dim)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.zeros_(module.bias)
+            torch.nn.init.ones_(module.weight)
+
+    def forward(
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        attention: bool = False,
     ):
 
-        self.gpt = GPT(
-            dim=dim,
-            dff_k=dff_k,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            activation=activation,
-            dropout=dropout,
-            use_pos_emb=use_pos_emb,
-            max_context=max_context,
-            cross_attention=cross_attention,
-        )
-        self.combine = nn.Linear(dim * 2, dim)
-        self.ln_combine = nn.LayerNorm(dim)
-
-    def forward(self, x1: torch.Tensor, x2: torch.Tensor, attention: bool = False):
-
         if attention:
-            z1, attn_self1, attn_cross1 = self.gpt(x=x1, src=x2)
-            z2, attn_self2, attn_cross2 = self.gpt(x=x2, src=x1)
-            z = self.ln_combine(self.combine(torch.cat((z1, z2), dim=-1)))
-            return z, {
-                "attn_self1": attn_self1,
-                "attn_cross1": attn_cross1,
-                "attn_self2": attn_self2,
-                "attn_cross2": attn_cross2,
-            }
-        else:
-            z1 = self.gpt(x=x1, src=x2)
-            z2 = self.gpt(x=x2, src=x1)
-            z = self.ln_combine(self.combine(torch.cat((z1, z2), dim=-1)))
-        return z
+            print("WARNING: StereoGPT attention is not implemented yet...")
+
+        for layer in self.layers:
+            x1, x2 = layer(x1=x1, x2=x2)
+
+        x = torch.cat((x1, x2), dim=-1)
+        x = self.combinator(x)
+        x = self.ln_combinator(x)
+        return x
 
 
+# For actual tests see ROOT/tests/test_transformer.py
 def _test_gpt():
     import matplotlib.pyplot as plt
 
@@ -258,6 +287,23 @@ def _test_gpt():
     ax[0, 0].set_yticks([])
     plt.tight_layout()
     plt.show()
+
+
+def _test_stereo():
+    layer = TransformerStereoLayer(
+        dim=256, ffn_dim=512, num_heads=8, cross_attention=True
+    )
+    x1 = torch.rand((4, 20, layer.dim))
+    x2 = torch.rand((4, 20, layer.dim))
+    z1, z2 = layer(x1, x2)
+
+    model = GPTStereo(dim=256, dff_k=3, num_layers=4, num_heads=8)
+    x1 = torch.rand((4, 20, model.dim))
+    x2 = torch.rand((4, 20, model.dim))
+    with torch.no_grad():
+        z = model(x1, x2)
+
+    print("z: ", tuple(z.shape))
 
 
 if __name__ == "__main__":
