@@ -1,4 +1,5 @@
 encoder:
+  mono: true
   pretrained: true
   output_layer: 1
   sample_rate: 16000
@@ -19,6 +20,7 @@ va_cond:
 ar:
   type: 'gpt'
   dim: 256
+  channel_layers: 1
   num_layers: 4
   num_heads: 4
   dff_k: 3
@@ -27,6 +29,7 @@ ar:
   max_context: null # no max context if use_pos_emb=0
   abspos: null  # deprecated
   sizeSeq: null  # deprecated
+
 
 vap:
   bin_times: [.2, .4, .6, .8]

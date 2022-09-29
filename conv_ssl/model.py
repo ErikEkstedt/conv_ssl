@@ -5,10 +5,23 @@ import einops
 from einops.layers.torch import Rearrange
 import pytorch_lightning as pl
 
-from conv_ssl.models import Encoder, AR
+from conv_ssl.models import Encoder, AR, GPT, GPTStereo
 from conv_ssl.utils import to_device, load_waveform, time_to_frames, get_audio_info
 from vap_turn_taking import VAP, TurnTakingMetrics
 from vap_turn_taking.utils import vad_list_to_onehot, get_activity_history
+
+
+def loss_vad_projection(logits, labels, reduction="mean"):
+    # CrossEntropyLoss over discrete labels
+    loss = F.cross_entropy(
+        einops.rearrange(logits, "b n d -> (b n) d"),
+        einops.rearrange(labels, "b n -> (b n)"),
+        reduction=reduction,
+    )
+    if reduction == "none":
+        n = logits.shape[1]
+        loss = einops.rearrange(loss, "(b n) -> b n", n=n)
+    return loss
 
 
 class VadCondition(nn.Module):
@@ -76,16 +89,36 @@ class ProjectionModel(nn.Module):
         super().__init__()
         self.conf = conf
 
+        self.mono = conf["encoder"]["mono"]
+
         # Audio Encoder
         freeze = conf["encoder"].get("freeze", True)
         self.encoder = Encoder(conf["encoder"], freeze=freeze)
 
         # VAD Conditioning
-        self.vad_condition = VadCondition(
-            self.encoder.output_dim,
-            va_history=conf["va_cond"]["history"],
-            va_history_bins=conf["va_cond"]["history_bins"],
-        )
+        if self.mono:
+            self.vad_condition = VadCondition(
+                self.encoder.output_dim,
+                va_history=conf["va_cond"]["history"],
+                va_history_bins=conf["va_cond"]["history_bins"],
+            )
+        else:
+            # stereo architecture
+            self.ar_channel = AR(
+                input_dim=self.encoder.output_dim,
+                dim=conf["ar"]["dim"],
+                num_layers=conf["ar"]["channel_layers"],
+                dropout=conf["ar"]["dropout"],
+                ar=conf["ar"]["type"],
+                transfomer_kwargs=dict(
+                    num_heads=conf["ar"]["num_heads"],
+                    dff_k=conf["ar"]["dff_k"],
+                    use_pos_emb=conf["ar"]["use_pos_emb"],
+                    max_context=conf["ar"].get("max_context", None),
+                    abspos=conf["ar"].get("abspos", None),
+                    sizeSeq=conf["ar"].get("sizeSeq", None),
+                ),
+            )
 
         # Autoregressive
         self.ar = AR(
@@ -111,18 +144,6 @@ class ProjectionModel(nn.Module):
             input_dim=conf["ar"]["dim"], n_bins=n_bins, type=self.vap_type
         )
 
-    def loss_vad_projection(self, logits, labels, reduction="mean"):
-        # CrossEntropyLoss over discrete labels
-        loss = F.cross_entropy(
-            einops.rearrange(logits, "b n d -> (b n) d"),
-            einops.rearrange(labels, "b n -> (b n)"),
-            reduction=reduction,
-        )
-        if reduction == "none":
-            n = logits.shape[1]
-            loss = einops.rearrange(loss, "(b n) -> b n", n=n)
-        return loss
-
     def encode(self, waveform):
         enc_out = self.encoder(waveform)
         z = enc_out.get("q_idx", enc_out["z"])
@@ -132,21 +153,81 @@ class ProjectionModel(nn.Module):
         out = {}
 
         # Encode Audio
-        z = self.encode(waveform)
+        if self.mono:
+            z = self.encode(waveform)
 
-        # Ugly: sometimes you may get an extra frame from waveform encoding
-        z = z[:, : va.shape[1]]
+            # Ugly: sometimes you may get an extra frame from waveform encoding
+            z = z[:, : va.shape[1]]
 
-        # Vad conditioning
-        # Also Ugly...
-        vc = self.vad_condition(va, va_history)
+            # Vad conditioning... extra frames... Also Ugly...
+            vc = self.vad_condition(va, va_history)[:, : z.shape[1]]
 
-        # Add vad-conditioning to audio features
-        z = z + vc[:, : z.shape[1]]
+            # Add vad-conditioning to audio features
+            z = z + vc
+        else:
+            # Placeholder before defining architecture
+            z1 = self.encode(waveform[:, :1])
+            z = z1 + self.encode(waveform[:, 1:])
 
         # Autoregressive
         z = self.ar(z)["z"]
 
+        out["logits_vp"] = self.vap_head(z)
+        return out
+
+
+class ProjectionModelStereo(nn.Module):
+    def __init__(self, conf) -> None:
+        super().__init__()
+        self.conf = conf
+
+        # Audio Encoder
+        self.encoder = Encoder(
+            conf["encoder"], freeze=conf["encoder"].get("freeze", True)
+        )
+
+        # Self attention only
+        self.self_attention = GPT(
+            dim=conf["ar"]["dim"],
+            dff_k=conf["ar"]["dff_k"],
+            num_layers=conf["ar"]["channel_layers"],
+            num_heads=conf["ar"]["num_heads"],
+            dropout=conf["ar"]["dropout"],
+        )
+
+        # Cross attention
+        self.cross_attention = GPTStereo(
+            dim=conf["ar"]["dim"],
+            num_layers=conf["ar"]["num_layers"],
+            num_heads=conf["ar"]["num_heads"],
+            dropout=conf["ar"]["dropout"],
+        )
+
+        # Appropriate VAP-head
+        self.vap_type = conf["vap"]["type"]
+        self.vap_head = VAPHead(
+            input_dim=conf["ar"]["dim"],
+            n_bins=len(conf["vap"]["bin_times"]),
+            type=self.vap_type,
+        )
+
+    def encode(self, waveform):
+        enc_out = self.encoder(waveform)
+        z = enc_out.get("q_idx", enc_out["z"])
+        return z
+
+    def forward(self, waveform, *args, **kwargs):
+        out = {}
+
+        x1 = self.encode(waveform[:, :1])
+        x2 = self.encode(waveform[:, 1:])
+
+        # Autoregressive
+        x1 = self.self_attention(x1)
+        x2 = self.self_attention(x2)
+        z = self.cross_attention(x1, x2)
+
+        # Projection logits
         out["logits_vp"] = self.vap_head(z)
         return out
 
@@ -157,7 +238,10 @@ class VPModel(pl.LightningModule):
         self.conf = conf
 
         # Network
-        self.net = ProjectionModel(conf["model"])  # x, vf, vh -> logits
+        if conf["model"]["encoder"]["mono"]:
+            self.net = ProjectionModel(conf["model"])  # x, vf, vh -> logits
+        else:
+            self.net = ProjectionModelStereo(conf["model"])  # x -> logits
         self.vap_type = conf["model"]["vap"]["type"]
 
         # VAP: labels, logits -> zero-shot probs
@@ -289,9 +373,7 @@ class VPModel(pl.LightningModule):
                 logits, va_labels, reduction=reduction
             )
         else:
-            loss = self.net.loss_vad_projection(
-                logits, labels=va_labels, reduction=reduction
-            )
+            loss = loss_vad_projection(logits, labels=va_labels, reduction=reduction)
         return loss
 
     def shared_step(self, batch, reduction="mean"):
@@ -505,6 +587,20 @@ def _test_model():
     model = VPModel(conf)
     model.val_metric = model.init_metric()
     ss = model.val_metric.hs.stat_scores
+
+
+def _test_stereo():
+    from conv_ssl.utils import load_hydra_conf
+
+    # TODO:
+    # [ ] Train regular model without VA-history on longer context ?
+    # [ ] Datasets stereo condition
+    # [ ] ProjectionModel stereo mode
+    # [ ] No voice activity input (history and VA)
+    conf = load_hydra_conf()
+
+    model = VPModel(conf)
+    model.val_metric = model.init_metric()
 
 
 if __name__ == "__main__":

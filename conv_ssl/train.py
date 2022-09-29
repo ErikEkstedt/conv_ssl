@@ -46,6 +46,9 @@ def train(cfg: DictConfig) -> None:
 
     if cfg_dict["trainer"]["fast_dev_run"]:
         trainer = pl.Trainer(**cfg_dict["trainer"])
+        print(cfg_dict["model"])
+        print("-" * 40)
+        print(dm)
         trainer.fit(model, datamodule=dm)
     else:
         # Callbacks & Logger

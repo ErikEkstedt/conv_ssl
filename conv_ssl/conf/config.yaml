@@ -35,13 +35,13 @@ trainer:
   gpus: -1
   fast_dev_run: 0
   deterministic: true
-  max_epochs: 30
+  max_epochs: 60
 
 data:
   datasets: ["switchboard", "fisher"]
   type: "sliding"
   sample_rate: ${model.encoder.sample_rate}
-  audio_mono: true
+  audio_mono: ${model.encoder.mono}
   audio_duration: 10
   audio_normalize: true
   audio_overlap: 1
