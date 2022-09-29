@@ -11,6 +11,19 @@ from vap_turn_taking import VAP, TurnTakingMetrics
 from vap_turn_taking.utils import vad_list_to_onehot, get_activity_history
 
 
+def loss_vad_projection(logits, labels, reduction="mean"):
+    # CrossEntropyLoss over discrete labels
+    loss = F.cross_entropy(
+        einops.rearrange(logits, "b n d -> (b n) d"),
+        einops.rearrange(labels, "b n -> (b n)"),
+        reduction=reduction,
+    )
+    if reduction == "none":
+        n = logits.shape[1]
+        loss = einops.rearrange(loss, "(b n) -> b n", n=n)
+    return loss
+
+
 class VadCondition(nn.Module):
     def __init__(self, dim, va_history=False, va_history_bins=5) -> None:
         super().__init__()
@@ -131,18 +144,6 @@ class ProjectionModel(nn.Module):
             input_dim=conf["ar"]["dim"], n_bins=n_bins, type=self.vap_type
         )
 
-    def loss_vad_projection(self, logits, labels, reduction="mean"):
-        # CrossEntropyLoss over discrete labels
-        loss = F.cross_entropy(
-            einops.rearrange(logits, "b n d -> (b n) d"),
-            einops.rearrange(labels, "b n -> (b n)"),
-            reduction=reduction,
-        )
-        if reduction == "none":
-            n = logits.shape[1]
-            loss = einops.rearrange(loss, "(b n) -> b n", n=n)
-        return loss
-
     def encode(self, waveform):
         enc_out = self.encoder(waveform)
         z = enc_out.get("q_idx", enc_out["z"])
@@ -175,7 +176,6 @@ class ProjectionModel(nn.Module):
         return out
 
 
-# TODO: tests for this
 class ProjectionModelStereo(nn.Module):
     def __init__(self, conf) -> None:
         super().__init__()
@@ -192,7 +192,6 @@ class ProjectionModelStereo(nn.Module):
             dff_k=conf["ar"]["dff_k"],
             num_layers=conf["ar"]["channel_layers"],
             num_heads=conf["ar"]["num_heads"],
-            activation=conf["ar"]["activation"],
             dropout=conf["ar"]["dropout"],
         )
 
@@ -201,7 +200,6 @@ class ProjectionModelStereo(nn.Module):
             dim=conf["ar"]["dim"],
             num_layers=conf["ar"]["num_layers"],
             num_heads=conf["ar"]["num_heads"],
-            activation=conf["ar"]["activation"],
             dropout=conf["ar"]["dropout"],
         )
 
@@ -212,18 +210,6 @@ class ProjectionModelStereo(nn.Module):
             n_bins=len(conf["vap"]["bin_times"]),
             type=self.vap_type,
         )
-
-    def loss_vad_projection(self, logits, labels, reduction="mean"):
-        # CrossEntropyLoss over discrete labels
-        loss = F.cross_entropy(
-            einops.rearrange(logits, "b n d -> (b n) d"),
-            einops.rearrange(labels, "b n -> (b n)"),
-            reduction=reduction,
-        )
-        if reduction == "none":
-            n = logits.shape[1]
-            loss = einops.rearrange(loss, "(b n) -> b n", n=n)
-        return loss
 
     def encode(self, waveform):
         enc_out = self.encoder(waveform)
@@ -255,7 +241,7 @@ class VPModel(pl.LightningModule):
         if conf["model"]["encoder"]["mono"]:
             self.net = ProjectionModel(conf["model"])  # x, vf, vh -> logits
         else:
-            self.net = ProjectionModelStereo(conf["model"])  # x, vf, vh -> logits
+            self.net = ProjectionModelStereo(conf["model"])  # x -> logits
         self.vap_type = conf["model"]["vap"]["type"]
 
         # VAP: labels, logits -> zero-shot probs
@@ -387,9 +373,7 @@ class VPModel(pl.LightningModule):
                 logits, va_labels, reduction=reduction
             )
         else:
-            loss = self.net.loss_vad_projection(
-                logits, labels=va_labels, reduction=reduction
-            )
+            loss = loss_vad_projection(logits, labels=va_labels, reduction=reduction)
         return loss
 
     def shared_step(self, batch, reduction="mean"):

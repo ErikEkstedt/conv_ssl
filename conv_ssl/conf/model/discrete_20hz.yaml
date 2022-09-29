@@ -1,4 +1,5 @@
 encoder:
+  mono: true
   pretrained: true
   output_layer: 1
   sample_rate: 16000
