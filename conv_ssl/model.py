@@ -321,11 +321,16 @@ class VPModel(pl.LightningModule):
     @property
     def run_name(self):
         conf = self.conf["model"]
-        name = conf["encoder"]["name"]
-        name += f"_{conf['ar']['num_layers']}{conf['ar']['num_heads']}"
+        name = f"{conf['encoder']['frame_hz']}hz"
+        if conf["encoder"]["mono"]:
+            name += f"_{conf['ar']['num_layers']}{conf['ar']['num_heads']}"
+        else:
+            name += "_stereo"
+            name += f"_{conf['ar']['channel_layers']}{conf['ar']['num_layers']}{conf['ar']['num_heads']}"
+        name += f'_{self.conf["data"]["audio_duration"]}s'
         if self.vap_type != "discrete":
             if self.vap_type == "comparative":
-                name += "_comp"
+                name += "_cmp"
             else:
                 n_bins = len(self.conf["vap"]["bin_times"])
                 name += f"_ind_{n_bins}"

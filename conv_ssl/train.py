@@ -46,6 +46,7 @@ def train(cfg: DictConfig) -> None:
 
     if cfg_dict["trainer"]["fast_dev_run"]:
         trainer = pl.Trainer(**cfg_dict["trainer"])
+        print("NAME: " + model.run_name)
         print(cfg_dict["model"])
         print("-" * 40)
         print(dm)
