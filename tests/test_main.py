@@ -15,6 +15,7 @@ everything_deterministic()
         "model/discrete",
         "model/discrete_20hz",
         "model/discrete_50hz",
+        "model/vap_stereo",
     ],
 )
 def test_cpc_train(config_name):

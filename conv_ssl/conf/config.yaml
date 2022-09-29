@@ -35,20 +35,20 @@ trainer:
   gpus: -1
   fast_dev_run: 0
   deterministic: true
-  max_epochs: 30
+  max_epochs: 60
 
 data:
   datasets: ["switchboard", "fisher"]
   type: "sliding"
   sample_rate: ${model.encoder.sample_rate}
-  audio_mono: true
+  audio_mono: ${model.encoder.mono}
   audio_duration: 10
   audio_normalize: true
   audio_overlap: 1
   # VAD
   vad_hz: ${model.encoder.frame_hz}
   vad_horizon: 2
-  vad_history: true
+  vad_history: ${model.va_cond.history}
   vad_history_times: [60, 30, 10, 5]
   # Data
   train_files: null
