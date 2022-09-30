@@ -11,17 +11,12 @@ hydra-core
 pytest
 datasets
 
+
+datasets_turntaking @ git+https://github.com/ErikEkstedt/datasets_turntaking
+vap_turn_taking @ git+https://github.com/ErikEkstedt/vap_turn_taking
+
 # CPC: does not seem to work directly. One must install cython 'pip install cython'
 # prior to 'pip install -r requirements.txt'
 cython
 soundfile
 git+https://github.com/facebookresearch/CPC_audio.git
-
-
-# Our Dependencies
-# must download and install via 
-# 'pip install -r requirements.txt'
-# 'pip install -e .'
-# in the respective repos
-# git+https://github.com/ErikEkstedt/vap_turn_taking.git
-# git+https://github.com/ErikEkstedt/datasets_turntaking.git
