@@ -7,7 +7,18 @@ from tqdm import tqdm
 from parselmouth.praat import call
 import parselmouth
 import matplotlib.pyplot as plt
-import textgrids
+
+try:
+    from textgrids import TextGrid
+except ModuleNotFoundError:
+
+    def TextGrid(*args, **kwargs):
+        assert NotImplementedError(
+            "praat-textgrids NOT installed. 'pip install praat-textgrids'"
+        )
+
+    pass
+
 
 from conv_ssl.augmentations import torch_to_praat_sound, praat_to_torch
 from conv_ssl.utils import read_txt
@@ -140,7 +151,7 @@ def match_duration(
 
 
 def read_text_grid(path):
-    grid = textgrids.TextGrid(path)
+    grid = TextGrid(path)
     data = {"words": [], "phones": []}
     for word_phones, vals in grid.items():
         for w in vals:
