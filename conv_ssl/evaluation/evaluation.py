@@ -35,7 +35,6 @@ python conv_ssl/evaluation/evaluation.py \
 
 def load_dm(model, cfg_dict, verbose=False):
     data_conf = model.conf["data"]
-    data_conf["audio_mono"] = False
     data_conf["datasets"] = cfg_dict["data"].get("datasets", data_conf["datasets"])
     data_conf["batch_size"] = cfg_dict["data"].get(
         "batch_size", data_conf["batch_size"]
@@ -255,6 +254,12 @@ def evaluate(cfg: DictConfig) -> None:
     Path(savepath).mkdir(exist_ok=True, parents=True)
 
     # Load data
+    print("Model mono: ", model.mono)
+    print("Model frame_hz: ", model.frame_hz)
+    print("Duration: ", cfg.data.audio_duration)
+    print("VAD-hist: ", cfg.data.vad_history)
+    print("Overlap: ", cfg.data.audio_overlap)
+    print("Sample rate: ", cfg.data.sample_rate)
     print("Num Workers: ", cfg.data.num_workers)
     print("Batch size: ", cfg.data.batch_size)
     print(cfg.data.datasets)
@@ -264,15 +269,17 @@ def evaluate(cfg: DictConfig) -> None:
         audio_duration=cfg.data.audio_duration,
         audio_normalize=cfg.data.audio_normalize,
         audio_overlap=cfg.data.audio_overlap,
+        audio_mono=model.mono,
         sample_rate=cfg.data.sample_rate,
         vad_hz=model.frame_hz,
         vad_horizon=model.VAP.horizon,
-        vad_history=cfg.data.vad_history,
+        vad_history=False if not model.mono else cfg.data.vad_history,
         vad_history_times=cfg.data.vad_history_times,
         flip_channels=False,
         batch_size=cfg.data.batch_size,
         num_workers=cfg.data.num_workers,
     )
+    print(dm)
     dm.prepare_data()
     dm.setup(None)
 
