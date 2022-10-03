@@ -89,7 +89,7 @@ class ProjectionModel(nn.Module):
         super().__init__()
         self.conf = conf
 
-        self.mono = conf["encoder"]["mono"]
+        self.mono = conf["encoder"].get("mono", True)
 
         # Audio Encoder
         freeze = conf["encoder"].get("freeze", True)
@@ -236,9 +236,10 @@ class VPModel(pl.LightningModule):
     def __init__(self, conf) -> None:
         super().__init__()
         self.conf = conf
+        self.mono = conf["model"]["encoder"].get("mono", True)
 
         # Network
-        if conf["model"]["encoder"]["mono"]:
+        if self.mono:
             self.net = ProjectionModel(conf["model"])  # x, vf, vh -> logits
         else:
             self.net = ProjectionModelStereo(conf["model"])  # x -> logits
@@ -392,36 +393,43 @@ class VPModel(pl.LightningModule):
             batch:      same as input arguments (fixed for differenct encoder Hz)
         """
         # Get labels
-        va_labels = self.VAP.extract_label(va=batch["vad"])
+        va_input = None
+        vah_input = None
+        va_labels = None
+        if "vad" in batch:
+            va_labels = self.VAP.extract_label(va=batch["vad"])
 
-        # Only keep the relevant vad information
-        n_valid = va_labels.shape[1]
-        batch["vad"] = batch["vad"][:, :n_valid]
-        if "vad_history" in batch:
-            batch["vad_history"] = batch["vad_history"][:, :n_valid]
+            # Only keep the relevant vad information
+            n_valid = va_labels.shape[1]
+            # batch["vad"] = batch["vad"][:, :n_valid]
+            va_input = batch["vad"][:, :n_valid]
+            if "vad_history" in batch:
+                # batch["vad_history"] = batch["vad_history"][:, :n_valid]
+                vah_input = batch["vad_history"][:, :n_valid]
 
         # Forward pass
-        out = self(
-            waveform=batch["waveform"],
-            va=batch["vad"],
-            va_history=batch.get("vad_history", None),
-        )
-        out["va_labels"] = va_labels
+        out = self(waveform=batch["waveform"], va=va_input, va_history=vah_input)
 
-        # Calculate Loss
-        loss = self.calc_losses(
-            logits=out["logits_vp"],
-            va_labels=va_labels,
-            reduction=reduction,
-        )
-        out_loss = {"vp": loss.mean(), "total": loss.mean()}
-        if reduction == "none":
-            out_loss["frames"] = loss
+        out_loss = {}
+        if va_labels is not None:
+            out["va_labels"] = va_labels
+            batch["vad"] = va_input
+            batch["vad_history"] = vah_input
+            logits = out["logits_vp"][:, : va_labels.shape[1]]
+
+            # Calculate Loss
+            loss = self.calc_losses(
+                logits=logits,
+                va_labels=va_labels,
+                reduction=reduction,
+            )
+            out_loss["vp"] = loss.mean()
+            out_loss["total"] = loss.mean()
+            if reduction == "none":
+                out_loss["frames"] = loss
         return out_loss, out, batch
 
-    def load_sample(
-        self, audio_path_or_waveform, vad_list, normalize=True, mono_channel=True
-    ):
+    def load_sample(self, audio_path_or_waveform, vad_list=None):
         """
         Get the sample from the dialog
 
@@ -431,51 +439,58 @@ class VPModel(pl.LightningModule):
             vad_history
         """
 
-        vad_hop_time = 1.0 / self.frame_hz
-        vad_history_frames = (
-            (torch.tensor(self.vad_history_times) / vad_hop_time).long().tolist()
-        )
-
         # Loads the dialog waveform (stereo) and normalize/to-mono for each
-        # smaller segment in loop below
-
         ret = {}
         if isinstance(audio_path_or_waveform, str):
             ret["waveform"] = load_waveform(
                 audio_path_or_waveform,
                 sample_rate=self.sample_rate,
-                normalize=normalize,
-                mono=mono_channel,
-            )[0]
+                normalize=True,
+                mono=self.mono,
+            )[0].unsqueeze(0)
             duration = get_audio_info(audio_path_or_waveform)["duration"]
         else:
             ret["waveform"] = audio_path_or_waveform
             duration = audio_path_or_waveform.shape[-1] / self.sample_rate
 
-        ##############################################
-        # VAD-frame of relevant part
-        ##############################################
-        end_frame = time_to_frames(duration, vad_hop_time)
-        all_vad_frames = vad_list_to_onehot(
-            vad_list,
-            hop_time=vad_hop_time,
-            duration=duration,
-            channel_last=True,
-        )
-        lookahead = torch.zeros((self.horizon_frames + 1, 2))
-        all_vad_frames = torch.cat((all_vad_frames, lookahead))
-        ret["vad"] = all_vad_frames[: end_frame + self.horizon_frames].unsqueeze(0)
+        if not self.mono:
+            if ret["waveform"].ndim == 2:
+                ret["waveform"] = ret["waveform"].unsqueeze(0)
 
-        ##############################################
-        # History
-        ##############################################
-        vad_history, _ = get_activity_history(
-            all_vad_frames,
-            bin_end_frames=vad_history_frames,
-            channel_last=True,
-        )
-        # vad history is always defined as speaker 0 activity
-        ret["vad_history"] = vad_history[:end_frame][..., 0].unsqueeze(0)
+            if ret["waveform"].shape[1] == 1:
+                z = torch.zeros_like(ret["waveform"])
+                ret["waveform"] = torch.cat((ret["waveform"], z), dim=1)
+
+        if vad_list is not None:
+            vad_hop_time = 1.0 / self.frame_hz
+            vad_history_frames = (
+                (torch.tensor(self.vad_history_times) / vad_hop_time).long().tolist()
+            )
+
+            ##############################################
+            # VAD-frame of relevant part
+            ##############################################
+            end_frame = time_to_frames(duration, vad_hop_time)
+            all_vad_frames = vad_list_to_onehot(
+                vad_list,
+                hop_time=vad_hop_time,
+                duration=duration,
+                channel_last=True,
+            )
+            lookahead = torch.zeros((self.horizon_frames + 1, 2))
+            all_vad_frames = torch.cat((all_vad_frames, lookahead))
+            ret["vad"] = all_vad_frames[: end_frame + self.horizon_frames].unsqueeze(0)
+
+            ##############################################
+            # History
+            ##############################################
+            vad_history, _ = get_activity_history(
+                all_vad_frames,
+                bin_end_frames=vad_history_frames,
+                channel_last=True,
+            )
+            # vad history is always defined as speaker 0 activity
+            ret["vad_history"] = vad_history[:end_frame][..., 0].unsqueeze(0)
         return ret
 
     @torch.no_grad()
