@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import einops
 from einops.layers.torch import Rearrange
 import pytorch_lightning as pl
+from typing import Dict, Any
 
 from conv_ssl.models import Encoder, AR, GPT, GPTStereo
 from conv_ssl.utils import to_device, load_waveform, time_to_frames, get_audio_info
@@ -89,7 +90,7 @@ class ProjectionModel(nn.Module):
         super().__init__()
         self.conf = conf
 
-        self.mono = conf["encoder"]["mono"]
+        self.mono = conf["encoder"].get("mono", True)
 
         # Audio Encoder
         freeze = conf["encoder"].get("freeze", True)
@@ -236,9 +237,10 @@ class VPModel(pl.LightningModule):
     def __init__(self, conf) -> None:
         super().__init__()
         self.conf = conf
+        self.mono = conf["model"]["encoder"].get("mono", True)
 
         # Network
-        if conf["model"]["encoder"]["mono"]:
+        if self.mono:
             self.net = ProjectionModel(conf["model"])  # x, vf, vh -> logits
         else:
             self.net = ProjectionModelStereo(conf["model"])  # x -> logits
@@ -281,6 +283,21 @@ class VPModel(pl.LightningModule):
     def horizon_time(self):
         return self.VAP.horizon
 
+    # TODO: Remove this for good -> new model
+    # DEPRECATED NAMES of self-attention in transformer
+    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        sd = checkpoint["state_dict"]
+        new_sd = {}
+        changed = 0
+        for param, weight in sd.items():
+            if "ln_multihead" in param:
+                param = param.replace("ln_multihead", "ln_self_attn")
+                changed += 1
+            new_sd[param] = weight
+        if changed > 0:
+            print('LOAD MODEL. Renamed "ln_multihead" -> ln_self_attn')
+        checkpoint["state_dict"] = new_sd
+
     def init_metric(
         self,
         conf=None,
@@ -322,7 +339,7 @@ class VPModel(pl.LightningModule):
     def run_name(self):
         conf = self.conf["model"]
         name = f"{conf['encoder']['frame_hz']}hz"
-        if conf["encoder"]["mono"]:
+        if self.mono:
             name += f"_{conf['ar']['num_layers']}{conf['ar']['num_heads']}"
         else:
             name += "_stereo"
