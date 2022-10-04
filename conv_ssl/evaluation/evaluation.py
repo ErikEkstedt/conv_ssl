@@ -19,8 +19,7 @@ from conv_ssl.utils import (
 from datasets_turntaking import DialogAudioDM
 
 # ugly path
-
-ROOT = join(dr(dr(dr(__file__))), "runs_evaluation")
+ROOT = join(dr(dr(dr(__file__))), "runs_evaluation/evaluation")
 MIN_THRESH = 0.01  # minimum threshold limit for S/L, S-pred, BC-pred
 
 everything_deterministic()
@@ -30,6 +29,8 @@ python conv_ssl/evaluation/evaluation.py \
         +checkpoint_path=/FULL/PATH/TO/CHECKPOINT/checkpoint.ckpt \
         data.num_workers=4 \
         data.batch_size=10
+
+        +savepath=/FULL/PATH/RESULTS  (defaults to git-root/runs_evaluation)
 """
 
 
