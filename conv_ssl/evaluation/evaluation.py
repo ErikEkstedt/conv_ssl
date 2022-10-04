@@ -20,7 +20,7 @@ from datasets_turntaking import DialogAudioDM
 
 # ugly path
 
-SAVEPATH = join(dr(dr(dr(__file__))), "assets/PaperB/eval")
+ROOT = join(dr(dr(dr(__file__))), "runs_evaluation")
 MIN_THRESH = 0.01  # minimum threshold limit for S/L, S-pred, BC-pred
 
 everything_deterministic()
@@ -249,9 +249,11 @@ def evaluate(cfg: DictConfig) -> None:
     if torch.cuda.is_available():
         model = model.to("cuda")
 
-    savepath = join(SAVEPATH, basename(cfg.checkpoint_path).replace(".ckpt", ""))
-    savepath += "_" + "_".join(cfg.data.datasets)
+    name = basename(cfg.checkpoint_path).replace(".ckpt", "")
+    name += "_" + "_".join(cfg.data.datasets)
+    savepath = join(cfg_dict.get("savepath", ROOT), name)
     Path(savepath).mkdir(exist_ok=True, parents=True)
+    write_json(cfg_dict, join(savepath, "config.json"))
 
     # Load data
     print("Model mono: ", model.mono)
@@ -323,7 +325,7 @@ def evaluate(cfg: DictConfig) -> None:
 
     metric_json = tensor_dict_to_json(metrics)
     write_json(metric_json, join(savepath, "metric.json"))
-    print("Saved metrics -> ", join(savepath, "metric.pt"))
+    print("Saved metrics -> ", join(savepath, "metric.json"))
 
 
 if __name__ == "__main__":

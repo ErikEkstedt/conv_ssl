@@ -28,12 +28,14 @@ class SymmetricSpeakersCallback(pl.Callback):
                 flipped = torch.stack((v[..., 1], v[..., 0]), dim=-1)
             elif k == "vad_history":
                 flipped = 1.0 - v
+            elif k == "waveform":
+                if v.shape[1] == 2:  # stereo audio
+                    flipped = torch.stack((v[:, 1], v[:, 0]), dim=1)
+                else:
+                    continue
             else:
                 flipped = v
-            if isinstance(v, torch.Tensor):
-                batch[k] = torch.cat((v, flipped))
-            else:
-                batch[k] = v + flipped
+            batch[k] = flipped
         return batch
 
     def on_train_batch_start(self, trainer, pl_module, batch, *args, **kwargs):
