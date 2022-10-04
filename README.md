@@ -153,11 +153,24 @@ metric_kwargs = event_settings['metric']
 
 ## Citation
 
+**TBD: citation from actual proceedings (not yet availabe)**
 
 ```latex
-TBA
+@article{ekstedtVapModel2022,
+  title = {Voice Activity Projection: Self-supervised Learning of Turn-taking Events},
+  url = {https://arxiv.org/abs/2205.09812},
+  author = {Ekstedt, Erik and Skantze, Gabriel},
+  journal = {arXiv},
+  year = {2022},
+}
 ```
 
 ```latex
-TBA
+@article{ekstedtVapProsody2022,
+  title = {How Much Does Prosody Help Turn-taking? Investigations using Voice Activity Projection Models},
+  url = {https://arxiv.org/abs/2209.05161},
+  author = {Ekstedt, Erik and Skantze, Gabriel},
+  journal = {arXiv},
+  year = {2022},
+}
 ```
