@@ -1,16 +1,85 @@
-# Continuous Conversational SSL
+# Voice Acticity Projection (Continuous Conversational SSL)
 
-Model training for 
-* [Voice Activity Projection: Self-supervised Learning of Turn-taking Events](https://arxiv.org/abs/2205.09812) 
-* [How Much Does Prosody Help Turn-taking? Investigations using Voice Activity Projection Models]()
+1. [DEMO page](https://erikekstedt.github.io/VAP/)
+2. [Voice Activity Projection: Self-supervised Learning of Turn-taking Events](https://arxiv.org/abs/2205.09812)
+    * Paper introducing the VAP model and comparing it to prior work [Skantze 2016]()
+    * **Accepted at INTERSPEECH2022**
+3. [How Much Does Prosody Help Turn-taking? Investigations using Voice Activity Projection Models](https://arxiv.org/abs/2209.05161)
+    * Analysis inspired by Psycholinguistics Prosodic analysis
+    * Winner of **Best Paper Award** at **SIGDIAL2022**
 
+Content
+* [Usage](#usage)
+  * [Train](#train)
+  * [Evaluation](#evaluation)
+* [Installation](#installation)
+* [Citation](#citation)
+
+## Usage
+
+The `run.py` script loads a pretrained model and evaluates on a sample (`waveform` + `text_grid_name.TextGrid` or `vad_list_name.json`).
+
+* Using defaults: `python run.py`
+* Custom run requires a audio file `sample.wav` and **either** a `vad_list_name.json` or `text_grid_name.TextGrid`
+* See `examples/` folder for model-checkpoint, input data format etc.
+
+```bash
+python run.py \
+  -c example/cpc_48_50hz_15gqq5s5.ckpt \
+  -w example/student_long_female_en-US-Wavenet-G.wav \ # waveform
+  -v example/vad_list.json \ # Required if model.mono=True else Optional
+  -o VAP_OUTPUT.json  # output file
+
+  # -tg example/student_long_female_en-US-Wavenet-G.TextGrid \ # OPTIONAL
+```
+
+### Train
+
+
+**WARNING: Requires access to `Fisher` and/or `Switchboard` datasets.**
+(DataModules, Datasets, etc are implemented in [datasets_turntaking](https://github.com/ErikEkstedt/datasets_turntaking))
+```bash
+python conv_ssl/train.py \
+  data.datasets=['switchboard','fisher'] \
+  +trainer.val_check_interval=0.5 \
+  early_stopping.patience=20
+```
+
+### Evaluation
+
+Evaluation over test-set.
+
+**WARNING: Requires access to `Fisher` and/or `Switchboard` datasets.**
+(DataModules, Datasets, etc are implemented in [datasets_turntaking](https://github.com/ErikEkstedt/datasets_turntaking))
+
+** WARNING: Using hydra (notice the '+' flag or the absence of a flag).**
+```bash
+python conv_ssl/evaluation/evaluation.py \
+  +checkpoint_path=/full/path/checkpoint.ckpt \
+  data.num_workers=4 \
+  data.batch_size=16
+```
+
+#### Phrases
+Phrase evaluation over generated phrase dataset used in [How Much Does Prosody Help Turn-taking? Investigations using Voice Activity Projection Models](https://arxiv.org/abs/2209.05161). 
+
+**WARNING: Using ArugmentParser (notice the '--'/'-' flags).**
+```bash
+python conv_ssl/evaluation/evaluation_phrases.py \
+  --checkpoint_path=path/checkpoint.ckpt
+
+  # --dataset=path/checkpoint.ckpt # OPTIONAL default: 'dataset_phrases/'
+  # --savepath=path/to/result/dir # OPTIONAL default: 'runs_evaluation/phrases'
+```
+
+----------------------------
 
 ## Installation
 
 * Create conda env: `conda create -n conv_ssl python=3.9`
   - source env: `conda source conv_ssl`
 * PyTorch: `conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch`
-* Dependencies: 
+* Dependencies:
   * Install requirements: `pip install -r requirements.txt`
   * **NOTE:** If you have problems install `pip install cython` manually first and then run the `pip install -r requirements.txt` command (trouble automating the install of the [CPC_audio](https://github.com/facebookresearch/CPC_audio) repo).
     * [Optional] Manual installation of [CPC_audio](https://github.com/facebookresearch/CPC_audio) (if the note above does not work)
@@ -29,59 +98,17 @@ Model training for
       * cd to repo, and install dependencies: `pip install -r requirements.txt`
       * Install repo: `pip install -e .`
     * **WARNING:** Requires [Switchboard](https://catalog.ldc.upenn.edu/LDC97S62) and/or [Fisher](https://catalog.ldc.upenn.edu/LDC2004S13) data!
-* Install **`conv_ssl`:** 
+* Install **`conv_ssl`:**
   * cd to root directory and run: `pip install -e .`
 
-### Train
-
-```bash
-python conv_ssl/train.py data.datasets=['switchboard','fisher'] +trainer.val_check_interval=0.5 early_stopping.patience=20
-```
-
-### Evaluate
-
-```bash
-python conv_ssl/evaluation/evaluation.py \
-  +checkpoint_path=/full/path/checkpoint.ckpt \
-  +savepath=assets/vap_fis \
-  data.num_workers=4 \
-  data.batch_size=16 
-```
-
-
-### Run
-
-The `run.py` script loads a pretrained model and evaluates on a sample (waveform + `text_grid_name.TextGrid` or `vad_list_name.json`). See `examples` folder for format etc.
-
-* Using defaults: `python run.py`
-* Custom run requires a audio file `sample.wav` and **either** a `text_grid_name.TextGrid` or `vad_list_name.json`
-  ```bash
-  python run.py \
-    -c example/cpc_48_50hz_15gqq5s5.ckpt \
-    -w example/student_long_female_en-US-Wavenet-G.wav \ # waveform
-    -tg example/student_long_female_en-US-Wavenet-G.TextGrid \ # text grid
-    -v example/vad_list.json \ # vad-list
-    -o VAP_OUTPUT.json  # output file
-  ```
-
+-------------------------
 
 ### Paper
 
-The paper investigates the performance over kfold splits (see `conv_ssl/config/swb_kfolds`) over 4 different model architectures ('discrete', 'independent', 'independent-40', 'comparative').
-* Save samples to disk: `conv_ssl/dataset_save_samples_to_disk.py` 
-* train on samples on disk: `conv_ssl/train_disk.py` 
-* run `scripts/model_kfold.bash`
-* We evaluate (find threshold over validation set + final evaluation on test-set)
-  - see `conv_ssl/evaluation/evaluate_paper_model.py`
-  - the ids are the `WandB` ids.
-  - We save all model scores to disk
-* In `conv_ssl/evaluation/anova.py` we compare the scores to extract the final values in the paper.
-
-## Experiments
-
-* Training uses [WandB](https://wandb.ai) by default.
+Event settings used in [Voice Activity Projection: Self-supervised Learning of Turn-taking Events](https://arxiv.org/abs/2205.09812).
 * The event settings used in the paper are included in `conv_ssl/config/event_settings.json`.
   - See paper Section 3
+* Events are extracted using [`vap_turn_taking`](https://github.com/ErikEkstedt/vap_turn_taking)
 
 ```python
 from conv_ssl.utils import read_json
@@ -125,6 +152,11 @@ metric_kwargs = event_settings['metric']
 
 
 ## Citation
+
+
+```latex
+TBA
+```
 
 ```latex
 TBA

@@ -133,6 +133,7 @@ assets/
 checkpoints/
 swb_dataset/
 runs/
+runs_evaluation/
 *.wav
 tmp_data/
 assets_local/
