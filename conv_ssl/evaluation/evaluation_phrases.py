@@ -1,7 +1,7 @@
 import torch
 import torchaudio
 from pathlib import Path
-from os.path import join, basename
+from os.path import join, basename, isdir
 from copy import deepcopy
 from tqdm import tqdm
 from os.path import join
@@ -82,7 +82,9 @@ def plot_sample(
     return fig, ax
 
 
-def load_model_dset(checkpoint, phrase_path="assets/phrases_beta/phrases.json"):
+def load_model_dset(checkpoint, phrase_path):
+    if isdir(phrase_path):
+        phrase_path = join(phrase_path, "phrases.json")
     model = VPModel.load_from_checkpoint(checkpoint)
     model = model.eval()
     _ = model.to("cuda")
@@ -158,7 +160,7 @@ def identity(waveform, vad=None):
     return waveform.squeeze(0)
 
 
-def evaluation(model, dset, checkpoint_name, savepath="assets/PaperB/eval_phrases"):
+def evaluation(model, dset, checkpoint_name, savepath):
     """
     Aggregate evaluation
 
@@ -175,14 +177,6 @@ def evaluation(model, dset, checkpoint_name, savepath="assets/PaperB/eval_phrase
         "regular": identity,
     }
 
-    # savepath = "assets/PaperB/eval_phrases_test"
-    # ch_root = "assets/PaperB/checkpoints"
-    # # checkpoint = join(ch_root, "cpc_48_20hz_2ucueis8.ckpt")
-    # checkpoint = join(ch_root, "cpc_48_50hz_15gqq5s5.ckpt")
-    # checkpoint_name = basename(checkpoint).replace(".ckpt", "")
-    # # checkpoint = join(ch_root, "cpc_48_100hz_3mkvq5fk.ckpt")
-    # model, dset = load_model_dset(checkpoint)
-
     pre_cutoff = 0.2
     post_cutoff = 0.2
     savepath += "_pre02"
@@ -196,9 +190,9 @@ def evaluation(model, dset, checkpoint_name, savepath="assets/PaperB/eval_phrase
     print("wav root: ", wav_root)
 
     all_stats = {}
-    pbar = tqdm(range(len(dset)))
+    pbar = tqdm(range(len(dset)), desc="Phrases evaluation (slow b/c non-batch)")
     for example, v in dset.data.items():
-        stats = {"short": {}, "long": {}}
+        stats_tmp = {"short": {}, "long": {}}
         for short_long, vv in v.items():
             for gender, sample_list in vv.items():
                 for nidx in range(len(sample_list)):
@@ -237,8 +231,8 @@ def evaluation(model, dset, checkpoint_name, savepath="assets/PaperB/eval_phrase
                         )
 
                         # Save Statistics
-                        if augmentation not in stats[short_long]:
-                            stats[short_long][augmentation] = {
+                        if augmentation not in stats_tmp[short_long]:
+                            stats_tmp[short_long][augmentation] = {
                                 "short_completion": {"pre": [], "end": [], "post": []},
                                 "last_completion": {"pre": [], "end": [], "post": []},
                             }
@@ -251,13 +245,13 @@ def evaluation(model, dset, checkpoint_name, savepath="assets/PaperB/eval_phrase
                             post_cutoff=post_cutoff,
                             frame_hz=model.frame_hz,
                         )
-                        stats[short_long][augmentation]["short_completion"][
+                        stats_tmp[short_long][augmentation]["short_completion"][
                             "pre"
                         ].append(pre)
-                        stats[short_long][augmentation]["short_completion"][
+                        stats_tmp[short_long][augmentation]["short_completion"][
                             "end"
                         ].append(end)
-                        stats[short_long][augmentation]["short_completion"][
+                        stats_tmp[short_long][augmentation]["short_completion"][
                             "post"
                         ].append(post)
 
@@ -269,31 +263,31 @@ def evaluation(model, dset, checkpoint_name, savepath="assets/PaperB/eval_phrase
                             post_cutoff=post_cutoff,
                             frame_hz=model.frame_hz,
                         )
-                        stats[short_long][augmentation]["last_completion"][
+                        stats_tmp[short_long][augmentation]["last_completion"][
                             "pre"
                         ].append(pre_last)
-                        stats[short_long][augmentation]["last_completion"][
+                        stats_tmp[short_long][augmentation]["last_completion"][
                             "end"
                         ].append(end_last)
-                        stats[short_long][augmentation]["last_completion"][
+                        stats_tmp[short_long][augmentation]["last_completion"][
                             "post"
                         ].append(post_last)
 
                         # Close figures
                         plt.close("all")
                     pbar.update()
-        all_stats[example] = stats
+        all_stats[example] = stats_tmp
 
     # Global Stats
-    all_statistics = {}
-    for example, stats in all_stats.items():
+    score = {}
+    for example, stats_tmp in all_stats.items():
         statistics = {}
         for long_short in ["long", "short"]:
             statistics[long_short] = {}
             for (
                 augmentation,
                 comp_stats,
-            ) in stats[long_short].items():
+            ) in stats_tmp[long_short].items():
                 if augmentation not in statistics[long_short]:
                     statistics[long_short][augmentation] = {}
                 for completion in ["short_completion", "last_completion"]:
@@ -325,12 +319,13 @@ def evaluation(model, dset, checkpoint_name, savepath="assets/PaperB/eval_phrase
                         "avg": avg,
                         "post": post,
                     }
-        all_statistics[example] = statistics
+        score[example] = statistics
 
-    torch.save(all_stats, join(root, "stats.pt"))
-    write_json(all_statistics, join(root, "score.json"))
+    write_json(score, join(root, "score.json"))
+    write_json(model.conf, join(root, "config.json"))
     print("Saved stats -> ", join(root, "score.json"))
-    return statistics, stats
+    print("Saved config -> ", join(root, "config.json"))
+    return score
 
 
 def _test_transforms(model, dset):
@@ -375,12 +370,22 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
 
     parser = ArgumentParser()
-    parser.add_argument("--checkpoint", type=str)
+    parser.add_argument("--checkpoint_path", type=str, help="Model checkpoint path")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="dataset_phrases",
+        help="Path (relative) to phrase-dataset or directly to the 'phrases.json' file used in 'PhraseDataset'",
+    )
+    parser.add_argument(
+        "--savepath",
+        type=str,
+        default="runs_evaluation/phrases",
+        help="Path to results directory",
+    )
     args = parser.parse_args()
-    # ch_root = "assets/PaperB/checkpoints"
-    # checkpoint = join(ch_root, "cpc_48_20hz_2ucueis8.ckpt")
-    # checkpoint = join(ch_root, "cpc_48_50hz_15gqq5s5.ckpt")
-    # checkpoint = join(ch_root, "cpc_48_100hz_3mkvq5fk.ckpt")
-    model, dset = load_model_dset(args.checkpoint)
-    checkpoint_name = basename(args.checkpoint).replace(".ckpt", "")
-    statistics, stats = evaluation(model, dset, checkpoint_name)
+    model, dset = load_model_dset(args.checkpoint_path, phrase_path=args.dataset)
+    checkpoint_name = basename(args.checkpoint_path).replace(".ckpt", "")
+    statistics, stats = evaluation(
+        model=model, dset=dset, checkpoint_name=checkpoint_name, savepath=args.savepath
+    )
