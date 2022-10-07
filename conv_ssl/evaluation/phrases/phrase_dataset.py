@@ -4,25 +4,26 @@ from torch.utils.data import Dataset
 from os.path import join, basename
 import matplotlib.pyplot as plt
 import librosa
+from copy import deepcopy
 from librosa import display
+from typing import Tuple
 
 from conv_ssl.augmentations import torch_to_praat_sound
-from conv_ssl.evaluation.duration import read_text_grid, EXAMPLE_TO_TARGET_WORD
 from conv_ssl.utils import read_json
 from datasets_turntaking.utils import (
     load_waveform,
     get_audio_info,
     time_to_frames,
 )
+
+from conv_ssl.evaluation.phrases.duration import read_text_grid, EXAMPLE_TO_TARGET_WORD
 from vap_turn_taking.utils import vad_list_to_onehot, get_activity_history
 
 
-TEXT_GRID_ROOT = "assets/phrases_beta/alignment"
-
-
 def audio_path_text_grid_path(path):
-    name = basename(path).replace(".wav", ".TextGrid")
-    return join(TEXT_GRID_ROOT, name)
+    # name = basename(path).replace(".wav", ".TextGrid")
+    tg_path = path.replace("/audio/", "/alignment/").replace(".wav", ".TextGrid")
+    return tg_path
 
 
 def words_to_vad(words):
@@ -33,14 +34,22 @@ def words_to_vad(words):
 
 
 def plot_sample_data(sample, sample_rate=16000, ax=None, fontsize=12, plot=False):
-    snd = torch_to_praat_sound(sample["waveform"], sample_rate)
+    w = deepcopy(sample["waveform"])
+    if w.ndim == 3:
+        if w.shape[1] == 1:
+            w = w.squeeze(1)
+        else:
+            raise NotImplementedError(
+                f"Stereo plot not implemented. waveform: {w.shape}"
+            )
+    snd = torch_to_praat_sound(w, sample_rate)
     pitch = snd.to_pitch()
     pitch_values = pitch.selected_array["frequency"]
     pitch_values[pitch_values == 0] = np.nan
     xmin, xmax = snd.xs().min(), snd.xs().max()
     melspec = librosa.power_to_db(
         librosa.feature.melspectrogram(
-            y=sample["waveform"].numpy(), sr=sample_rate, n_fft=800, hop_length=160
+            y=w.numpy(), sr=sample_rate, n_fft=800, hop_length=160
         ),
         ref=np.max,
     )[0]
@@ -188,6 +197,67 @@ def plot_sample_data(sample, sample_rate=16000, ax=None, fontsize=12, plot=False
     return fig, ax, SCP_line_x
 
 
+def plot_next_speaker(p_ns, ax, color=["b", "orange"], alpha=0.6, fontsize=12):
+    x = torch.arange(len(p_ns))
+    ax.fill_between(
+        x,
+        y1=0.5,
+        y2=p_ns,
+        where=p_ns > 0.5,
+        alpha=alpha,
+        color=color[0],
+        label="A turn",
+    )
+    ax.fill_between(
+        x,
+        y1=p_ns,
+        y2=0.5,
+        where=p_ns < 0.5,
+        alpha=alpha,
+        color=color[1],
+        label="B turn",
+    )
+    ax.set_xlim([0, len(p_ns)])
+    ax.set_xticks([])
+    ax.set_yticks([0.25, 0.75], ["SHIFT", "HOLD"], fontsize=fontsize)
+    ax.set_ylim([0, 1])
+    ax.hlines(y=0.5, xmin=0, xmax=len(p_ns), linestyle="dashed", color="k")
+    return ax
+
+
+def plot_sample(
+    p_ns, sample, sample_rate=16000, frame_hz=50, fontsize=12, ax=None, plot=False
+) -> Tuple[plt.Figure, plt.Axes]:
+    fig = None
+    if ax is None:
+        fig, ax = plt.subplots(4, 1, figsize=(6, 5))
+
+    # plot sample data ax[0], ax[1], ax[2]
+    _, ax, scp_line_x = plot_sample_data(
+        sample, sample_rate=sample_rate, ax=ax, fontsize=fontsize
+    )
+
+    # Next speaker probs
+    _ = plot_next_speaker(p_ns, ax=ax[3], fontsize=fontsize)
+
+    if "words" in sample:
+        end_frame = round(sample["words"][-1][1] * frame_hz)
+        ax[3].vlines(end_frame, ymin=-1, ymax=1, linewidth=2, color="r")
+
+    if scp_line_x is not None:
+        scp_frame = round(scp_line_x * frame_hz)
+        ax[3].vlines(
+            scp_frame, ymin=-1, ymax=1, linewidth=2, linestyle="dashed", color="r"
+        )
+
+    plt.subplots_adjust(
+        left=0.1, bottom=0.05, right=0.9, top=0.95, wspace=None, hspace=0.09
+    )
+    if plot:
+        plt.pause(0.1)
+    return fig, ax
+
+
 class PhraseDataset(Dataset):
     def __init__(
         self,
@@ -282,6 +352,9 @@ class PhraseDataset(Dataset):
             mono=self.audio_mono,
         )
 
+        if waveform.ndim == 2:
+            waveform = waveform.unsqueeze(1)
+
         # dict to return
         ret = {
             "waveform": waveform,
@@ -328,11 +401,12 @@ class PhraseDataset(Dataset):
             ].unsqueeze(0)
         return ret
 
-    def get_sample_data(self, sample, example):
+    def get_sample_data(self, sample, example, transform=None):
         tg = read_text_grid(audio_path_text_grid_path(sample["audio_path"]))
         vad_list = words_to_vad(tg["words"])
         # Returns: waveform, dataset_name, vad, vad_history
         ret = self._sample_data(sample, vad_list)
+
         ret["example"] = example
         ret["words"] = tg["words"]
         ret["phones"] = tg["phones"]
@@ -341,9 +415,6 @@ class PhraseDataset(Dataset):
             if k in ["vad", "words"]:
                 continue
             ret[k] = v
-        # ret["gender"] = sample["gender"]
-        # ret["size"] = sample["size"]
-        # ret["text"] = sample["text"]
         return ret
 
     def get_sample(self, example, long_short, gender, id):
@@ -357,11 +428,69 @@ class PhraseDataset(Dataset):
 
 if __name__ == "__main__":
 
-    dset = PhraseDataset("assets/phrases_beta/phrases.json")
+    import conv_ssl.transforms as CT
+    from conv_ssl.model import VPModel
+    from conv_ssl.utils import everything_deterministic
+
+    everything_deterministic()
+
+    chpt = torch.load("example/cpc_48_50hz_15gqq5s5.ckpt")
+    sd = chpt["state_dict"]
+    for k, v in sd.items():
+        if isinstance(v, torch.Tensor):
+            print(f"{k}: {tuple(v.shape)}")
+        else:
+            print(f"{k}: {v}")
+
+    input()
+
+    model = VPModel.load_from_checkpoint("example/cpc_48_50hz_15gqq5s5.ckpt")
+    model = model.eval()
+    if torch.cuda.is_available():
+        _ = model.to("cuda")
+    # print(model)
+
+    print(f"vad_hz={model.frame_hz}")
+    print(f"sample_rate={model.sample_rate}")
+    print(f"vad_horizon={model.VAP.horizon}")
+    print(f'vad_history={model.conf["data"]["vad_history"]}')
+    print(f'vad_history_times={model.conf["data"]["vad_history_times"]}')
+    dset = PhraseDataset(
+        "dataset_phrases/phrases.json",
+        vad_hz=model.frame_hz,
+        sample_rate=model.sample_rate,
+        vad_horizon=model.VAP.horizon,
+        vad_history=model.conf["data"]["vad_history"],
+        vad_history_times=model.conf["data"]["vad_history_times"],
+    )
+    transforms = {
+        "flat_f0": CT.FlatPitch(),
+        "only_f0": CT.LowPass(),
+        "shift_f0": CT.ShiftPitch(),
+        "flat_intensity": CT.FlatIntensity(vad_hz=model.frame_hz),
+        "avg_duration": None,
+        "regular": None,
+    }
+
+    ##############################################################
     sample = dset.get_sample("student", "short", "female", 0)
     for k, v in sample.items():
-        print(f"{k}: {type(v)}")
+        if isinstance(v, torch.Tensor):
+            print(f"{k}: {type(v)}, {v.shape}")
+        else:
+            print(f"{k}: {type(v)}")
+    _, _, prob, sample = model.output(sample)
+    print(prob.keys())
+    fig, ax = plot_sample(prob["p"][0, :, 0], sample, frame_hz=model.frame_hz)
+    plt.savefig("fig.png")
 
-    sample = dset.get_sample("student", "long", "female", 2)
-    fig, ax, scp_line = plot_sample_data(sample)
-    plt.show()
+    # for example, v in dset.data.items():
+    #     for long_short, vv in v.items():
+    #         for gender, sample_list in vv.items():
+    #             for nidx in range(len(sample_list)):
+    #                 print(f"{example} {long_short} {gender} {nidx}")
+    #                 sample = dset.get_sample(example, long_short, gender, nidx)
+    #                 # w = CT.LowPass()(waveform=sample["waveform"])  # Works
+    #                 # w = CT.FlatIntensity(vad_hz=dset.vad_hz)(waveform=sample["waveform"], vad=sample['vad']) # works
+    #                 # w = CT.FlatPitch()(waveform=sample["waveform"], vad=sample['vad']) # works
+    #                 # w = CT.ShiftPitch()(waveform=sample["waveform"], vad=sample['vad']) # works

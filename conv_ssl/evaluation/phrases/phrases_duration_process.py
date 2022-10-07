@@ -1,28 +1,63 @@
 from argparse import ArgumentParser
 import parselmouth
+from copy import deepcopy
 import numpy as np
 import torchaudio
-from os.path import join, basename
+from os.path import join
 from pathlib import Path
 from parselmouth.praat import call
 import string
 from tqdm import tqdm
 
 from conv_ssl.augmentations import torch_to_praat_sound, praat_to_torch
-from conv_ssl.evaluation.duration import read_text_grid
-from conv_ssl.evaluation.phrase_dataset import PhraseDataset, words_to_vad
+from conv_ssl.evaluation.phrases.duration import read_text_grid
+from conv_ssl.evaluation.phrases.phrase_dataset import PhraseDataset, words_to_vad
 
 
-ROOT = "assets/phrases_beta"
-WAV_ROOT = join(ROOT, "duration_audio")
-TG_ROOT = join(ROOT, "duration_alignment")
-
+WAV_FOLDER = "duration_audio"
+TG_FOLDER = "duration_alignment"
 
 """
 1. Extract audio and save transcripts -> `python conv_ssl/evaluation/phrases_duration_process.py --preprocess`
 2. Align audio and save .TextGrid -> `bash conv_ssl/evaluation/forced_alignment_duration.bash`
     - don't forget to source conda env
 """
+
+
+def convert_to_duration_audio(audio_path):
+    """
+    audio_path: dataset_phrases/audio/student_short_female_en-US-Wavenet-G.wav
+    ->          dataset_phrases/duration_audio/student_short_female_en-US-Wavenet-G.wav
+    """
+    return audio_path.replace("/audio/", "/" + WAV_FOLDER + "/")
+
+
+def convert_to_duration_tg(audio_path):
+    """
+    audio_path: dataset_phrases/audio/student_short_female_en-US-Wavenet-G.wav
+    ->          dataset_phrases/duration_alignment/student_short_female_en-US-Wavenet-G.TextGrid
+    """
+    return audio_path.replace("/audio/", "/" + TG_FOLDER + "/").replace(
+        ".wav", ".TextGrid"
+    )
+
+
+def raw_sample_to_sample(sample, dset):
+    """rewritten `dset.get_sample_data()`"""
+    sample = deepcopy(sample)
+
+    tg_path = convert_to_duration_tg(sample["audio_path"])
+    sample["audio_path"] = convert_to_duration_audio(sample["audio_path"])
+    tg = read_text_grid(tg_path)
+    vad_list = words_to_vad(tg["words"])
+
+    # Returns: waveform, dataset_name, vad, vad_history
+    ret = dset._sample_data(sample, vad_list)
+    ret["example"] = sample["example"]
+    ret["words"] = tg["words"]
+    ret["phones"] = tg["phones"]
+    ret["size"] = sample["size"]
+    return ret
 
 
 def calculate_average_phone_duration(dset):
@@ -101,46 +136,23 @@ class DurationAvg(object):
         return praat_to_torch(sound_dur)
 
 
-def extract_new_audio(dset):
+def extract_avg_duration_audio(dset, root="dataset_phrases/duration_audio"):
     """
     Load sample -> change duration -> save .wav and transcript .txt
     """
     phone_durations = calculate_average_phone_duration(dset)
     duration_modifier = DurationAvg(phone_durations)
-    Path(WAV_ROOT).mkdir(parents=True, exist_ok=True)
+    Path(root).mkdir(parents=True, exist_ok=True)
     for sample in tqdm(dset, desc="Extract avg-duration audio"):
         sample["waveform"] = duration_modifier(sample)
-        wavfile = join(WAV_ROOT, sample["name"] + ".wav")
-        textfile = join(WAV_ROOT, sample["name"] + ".txt")
+        wavfile = join(root, sample["name"] + ".wav")
+        textfile = join(root, sample["name"] + ".txt")
         torchaudio.save(wavfile, sample["waveform"], sample_rate=dset.sample_rate)
         text = sample["text"].replace("-", " ")
         text = text.translate(str.maketrans("", "", string.punctuation)).lower()
         with open(textfile, "w") as text_file:
             text_file.write(text)
-    print("Extracted avg-duration waveforms to -> ", WAV_ROOT)
-
-
-def raw_sample_to_sample(sample, dset):
-    """rewritten `dset.get_sample_data()`"""
-    sample["audio_path"] = join(WAV_ROOT, basename(sample["audio_path"]))
-    tg_path = join(TG_ROOT, sample["name"] + ".TextGrid")
-    tg = read_text_grid(tg_path)
-    vad_list = words_to_vad(tg["words"])
-    # Returns: waveform, dataset_name, vad, vad_history
-    ret = dset._sample_data(sample, vad_list)
-    ret["example"] = sample["example"]
-    ret["words"] = tg["words"]
-    ret["phones"] = tg["phones"]
-    ret["size"] = sample["size"]
-
-    # print("ret: ", list(ret.keys()))
-    # for k, v in sample.items():
-    #     if k in ["vad", "words", "phones", "waveform"]:
-    #         continue
-    #     ret[k] = v
-    # print("ret: ", list(ret.keys()))
-    # input()
-    return ret
+    print("Extracted avg-duration waveforms to -> ", root)
 
 
 def _test():
