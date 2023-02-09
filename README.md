@@ -1,5 +1,11 @@
 # Continuous Conversational SSL
 
+
+OLD REPO FOR ACCESS TO THE NEWER STEREO-VERSION OF THIS MODEL SEE [VoiceActivityProjection](https://github.com/ErikEkstedt/VoiceActivityProjection)
+
+IT SIMPLIFIES INFERENCE AND DEPENDENCY HELL...
+
+
 Model training for 
 * [Voice Activity Projection: Self-supervised Learning of Turn-taking Events](https://arxiv.org/abs/2205.09812) 
 * [How Much Does Prosody Help Turn-taking? Investigations using Voice Activity Projection Models]()
